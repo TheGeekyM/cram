@@ -118,7 +118,7 @@ function Coach({ study, ch, code, results, onChat }) {
 }
 
 // ---------- arena ----------
-function Arena({ study, ch, setCh, onBack }) {
+function Arena({ study, ch, setCh, onBack, onNext }) {
   const [code, setCode] = useState(ch.code || ch.starter); const [res, setRes] = useState(null); const [running, setRunning] = useState(false)
   const [review, setReview] = useState(''); const [reviewing, setReviewing] = useState(false); const [elapsed, setElapsed] = useState(ch.elapsed || 0); const [showCoach, setShowCoach] = useState(true)
   const base = `/api/studies/${study.id}/challenge/${ch.id}`
@@ -134,7 +134,10 @@ function Arena({ study, ch, setCh, onBack }) {
     setRes(r); const solved = r.passed === r.results.length
     patch({ code, elapsed, passed: r.passed, ...(solved && ch.status === 'open' ? { status: 'solved' } : {}) })
   }
-  const ask = async () => { setReviewing(true); setReview(''); await api.stream(`${base}/review`, { code, results: res }, setReview); setReviewing(false) }
+  const getReview = async () => { setReviewing(true); setReview(''); await api.stream(`${base}/review`, { code, results: res }, setReview); setReviewing(false) }
+  const [nexting, setNexting] = useState(false)
+  const next = async () => { setNexting(true); const n = await api.post(`${base}/next`, { code, results: res }); setNexting(false); if (n.error) return alert(n.error); onNext(n) }
+  const cleared = ch.status === 'solved' || (res && res.passed === res.results.length)
   const giveUp = async () => { if (await ask({ title: 'Give up on this one?', body: 'The timer stops and the challenge stays in your list as given up. You can still ask the coach or get a review.', ok: 'Give up' })) patch({ status: 'given-up', elapsed, code }) }
   const tab = e => { if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; setCode(code.slice(0, s) + '    ' + code.slice(t.selectionEnd)); requestAnimationFrame(() => t.selectionStart = t.selectionEnd = s + 4) } }
   return (
@@ -145,6 +148,7 @@ function Arena({ study, ch, setCh, onBack }) {
         {res && <span className={`badge ${res.passed === res.results.length ? 'badge-green' : 'badge-red'}`}>{res.passed} / {res.results.length}</span>}
         <Timer elapsed={elapsed} limitMin={ch.limitMin || 30} status={ch.status} />
         {ch.status === 'open' && <button onClick={giveUp} className="btn-tint btn-red">Give up</button>}
+        {(ch.status !== 'open' || res) && <button onClick={next} disabled={nexting} className="btn-tint btn-green" title={cleared ? 'A harder challenge on the same concept' : 'A smaller challenge that isolates what is failing'}>{nexting ? <Wait label="Building…" /> : <>{cleared ? 'Next: harder' : 'Next: focused practice'}<Ico d={<path d="m9 18 6-6-6-6"/>} /></>}</button>}
         <button onClick={() => setShowCoach(v => !v)} className={`btn-tint ${showCoach ? 'btn-purple' : ''}`} title="Toggle coach"><Ico d={<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>} />Coach</button>
       </div>
       <div className="flex-1 min-h-0 grid gap-2.5" style={{ gridTemplateColumns: showCoach ? 'minmax(260px,1fr) minmax(360px,1.4fr) minmax(260px,.9fr)' : 'minmax(260px,1fr) minmax(360px,1.6fr)' }}>
@@ -158,7 +162,7 @@ function Arena({ study, ch, setCh, onBack }) {
           <div className="border-t border-border p-2 flex flex-col gap-2 max-h-[45%] overflow-y-auto">
             <div className="flex items-center gap-2 flex-wrap">
               <button className="btn btn-primary" disabled={running} onClick={run}>{running ? <Spin /> : <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} /> Run tests</>}</button>
-              <button className="btn-tint btn-purple" disabled={reviewing} onClick={ask}>Get review</button>
+              <button className="btn-tint btn-purple" disabled={reviewing} onClick={getReview}>Get review</button>
               <button className="btn-tint" onClick={() => setCode(ch.starter)} title="Reset to starter code">Reset</button>
             </div>
             {res && <div className="flex flex-col gap-1">{res.results.map((r, i) => (
@@ -197,7 +201,7 @@ export default function CodeArena({ studies }) {
       `}</style>
   )
   if (!list) return <div className="h-full grid place-items-center text-xs text-dim">Loading…</div>
-  if (active) return <>{css}<Arena key={active.id} study={{ id: active.studyId }} ch={active} setCh={setCh} onBack={() => setSel(null)} /></>
+  if (active) return <>{css}<Arena key={active.id} study={{ id: active.studyId }} ch={active} setCh={setCh} onBack={() => setSel(null)} onNext={c => { add(c, active.studyId); setSel(c.id) }} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered>
     {list.length > 0 && <button onClick={() => setSel(null)} className="btn-ghost text-xs inline-flex items-center gap-1 mb-2"><Ico d={<path d="m15 18-6-6 6-6"/>} />Back to challenges</button>}
     <Hero busy={busy} onStart={start} studies={studies} />

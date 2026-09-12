@@ -730,6 +730,11 @@ export default function NotesScreen({ project, onBack, onHome }) {
     })
     return () => clearTimeout(saveTimer.current)
   }, [project.id, editor])
+  // another screen added a note (Studies › Export practice): refresh the list only, never the open editor
+  useEffect(() => {
+    const f = () => window.api.notes.list(project.id, []).then(r => { if (r.ok) setNotes(r.notes) })
+    window.addEventListener('cram:notes-changed', f); return () => window.removeEventListener('cram:notes-changed', f)
+  }, [project.id])
 
   function open(note) {
     clearTimeout(saveTimer.current)

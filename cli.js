@@ -17,9 +17,9 @@ exports.available = () => !!bin();
 
 // messages: [{role, content:string}] → one prompt on stdin. ponytail: history is flattened
 // into the prompt; switch to --resume session ids if long chats get slow.
-exports.stream = ({ system, messages, model, pdf, onDelta = () => {}, timeout = 600000, signal }) => new Promise(resolve => {
+exports.stream = ({ system, messages, model, pdf, onDelta = () => {}, timeout = 600000, signal, web = false }) => new Promise(resolve => {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', model,
-    '--permission-mode', 'bypassPermissions', '--append-system-prompt', system, '--disallowedTools', pdf ? READ_ONLY : NO_TOOLS];
+    '--permission-mode', 'bypassPermissions', '--append-system-prompt', system, '--disallowedTools', (pdf ? READ_ONLY : NO_TOOLS).replace(web ? 'WebFetch,WebSearch,' : '\0', '')]; // web: opt-in search for calls that need real links
   if (pdf) args.push('--add-dir', path.dirname(pdf));
   const convo = messages.map(m => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`).join('\n\n');
   const prompt = (pdf ? `The study material is the PDF at ${pdf}. Read it with the Read tool before answering (all pages that matter). Do not mention the file path or the tool.\n\n` : '') + convo + '\n\nAssistant:';

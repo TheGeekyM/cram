@@ -36,7 +36,7 @@ export function NewDialog({ mode, prefill, onClose, onCreated }) {
 
 // First-run onboarding + later edits: who you are and where you want to go, so the coach can be specific.
 export function ProfileDialog({ profile, onSave, onClose }) {
-  const [p, setP] = useState({ name: '', career: '', goal: '', hoursPerWeek: 5, notes: '', ...profile }); const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
+  const [p, setP] = useState({ name: '', career: '', goal: '', hoursPerWeek: 5, notes: '', examName: '', examDate: '', ...profile }); const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
   const set = k => e => setP(x => ({ ...x, [k]: e.target.value }))
   const save = async () => {
     if (!p.name.trim()) return setErr('Your name is the only required field.')
@@ -61,6 +61,10 @@ export function ProfileDialog({ profile, onSave, onClose }) {
           </div>
           {F({ label: 'What do you do now?', k: 'career', ph: 'e.g. backend developer, 3 years PHP; or CS student, 2nd year' })}
           {F({ label: 'What do you want to become / achieve?', k: 'goal', ph: 'e.g. senior engineer at a product company, pass the AWS SA exam in March' })}
+          <div className="grid grid-cols-2 gap-x-3">
+            {F({ label: 'Exam or deadline (optional)', k: 'examName', ph: 'e.g. AWS SA Associate' })}
+            <label className="block mb-3"><span className="text-[11px] uppercase tracking-wider text-dim">Date</span><input type="date" className="input mt-1" value={p.examDate || ''} onChange={set('examDate')} /></label>
+          </div>
           {F({ label: 'Anything else the coach should know?', k: 'notes', ph: 'Exam dates, weak spots, how you like to learn, time of day you study…', rows: 2 })}
           {err && <div className="text-xs text-error mb-2">{err}</div>}
           <div className="flex items-center gap-2 mt-1"><span className="text-[11px] text-dim flex-1">* required. The more you fill in, the better the coaching.</span><button className="btn btn-ghost" onClick={onClose}>{profile?.name ? 'Cancel' : 'Later'}</button><button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : profile?.name ? 'Save' : "Let's go"}</button></div>

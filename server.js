@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const Anthropic = require('@anthropic-ai/sdk');
 const auth = require('./auth');
 const cli = require('./cli');
+const { verify } = require('./linkcheck');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -90,20 +91,21 @@ async function streamText0(res, s, messages, extra) {
   } catch (e) { if (!ac.signal.aborted) res.write(`\n\n**Error:** ${e.message}`); }
   res.end(); return text;
 }
-const json = (s, prompt, extra) => timed(`json ${prompt.slice(0, 40).replace(/\s+/g, ' ')}…`, s, () => json0(s, prompt, extra));
-async function json0(s, prompt, extra) {
+// opts.web: allow web search (real links); opts.signal: abort when the client goes away
+const json = (s, prompt, extra, opts) => timed(`json ${prompt.slice(0, 40).replace(/\s+/g, ' ')}…`, s, () => json0(s, prompt, extra, opts));
+async function json0(s, prompt, extra, opts = {}) {
   let text;
   if (useCli()) {
     const { system, pdf } = context(s);
-    const r = await cli.stream({ system, messages: [{ role: 'user', content: prompt }], model: settings().model || 'claude-opus-5', pdf });
+    const r = await cli.stream({ system, messages: [{ role: 'user', content: prompt }], model: settings().model || 'claude-opus-5', pdf, web: opts.web, signal: opts.signal });
     if (!r.ok) throw new Error(r.message); text = r.text;
   } else {
     const { c, betas } = await client();
-    const r = await c.beta.messages.create({ ...req(s, [{ role: 'user', content: prompt }], extra), betas });
+    const web = opts.web ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }] } : {};
+    const r = await c.beta.messages.create({ ...req(s, [{ role: 'user', content: prompt }], { ...web, ...extra }), betas }, { signal: opts.signal });
     text = r.content.filter(b => b.type === 'text').map(b => b.text).join('');
   }
-  const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/); // ponytail: JSON-in-prompt + regex extract, swap for output_config.format if it ever misparses
-  return JSON.parse(m ? m[0] : text);
+  return require('./jsonish').parse(text); // tolerant: prose around the JSON, raw quotes inside strings
 }
 
 // ---------- studies ----------
@@ -123,7 +125,7 @@ app.post('/api/studies', (req, res) => {
   save(s); res.json(s);
 });
 // every session of one kind across studies, newest first, tagged with its study (the grid tools)
-for (const kind of ['quizzes', 'interviews', 'challenges']) app.get(`/api/${kind}`, (req, res) => res.json(fs.readdirSync(STUDIES).map(study).flatMap(s => (s[kind] || []).map(i => ({ ...i, studyId: s.id, studyTitle: s.title }))).sort((a, b) => b.at - a.at)));
+for (const kind of ['interviews', 'challenges']) app.get(`/api/${kind}`, (req, res) => res.json(fs.readdirSync(STUDIES).map(study).flatMap(s => (s[kind] || []).map(i => ({ ...i, studyId: s.id, studyTitle: s.title }))).sort((a, b) => b.at - a.at)));
 app.get('/api/studies/:id', (req, res) => { try { res.json(study(req.params.id)); } catch { res.status(404).json({ error: 'no such study' }); } });
 app.delete('/api/studies/:id', (req, res) => { fs.rmSync(path.join(STUDIES, req.params.id), { recursive: true }); res.json({ ok: true }); });
 const touch = s => { s.updatedAt = Date.now(); save(s); };
@@ -133,8 +135,8 @@ const PROFILE = path.join(DATA, 'profile.json'), COACH = path.join(DATA, 'coach.
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f)); } catch { return d; } };
 app.get('/api/profile', (req, res) => res.json(readJson(PROFILE, null) || {}));
 app.post('/api/profile', (req, res) => {
-  const keep = ['name', 'career', 'goal', 'hoursPerWeek', 'notes'], p = { ...(readJson(PROFILE, {})), updatedAt: Date.now() };
-  for (const k of keep) if (k in req.body) p[k] = k === 'hoursPerWeek' ? Math.max(1, Math.min(80, +req.body[k] || 5)) : String(req.body[k] || '').slice(0, 400);
+  const keep = ['name', 'career', 'goal', 'hoursPerWeek', 'notes', 'examDate', 'examName'], p = { ...(readJson(PROFILE, {})), updatedAt: Date.now() };
+  for (const k of keep) if (k in req.body) p[k] = k === 'hoursPerWeek' ? Math.max(1, Math.min(80, +req.body[k] || 5)) : k === 'examDate' ? (/^\d{4}-\d{2}-\d{2}$/.test(req.body[k] || '') ? req.body[k] : '') : String(req.body[k] || '').slice(0, 400);
   fs.writeFileSync(PROFILE, JSON.stringify(p)); res.json(p);
 });
 const localDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -153,7 +155,7 @@ function dashboard() {
     return { id: s.id, title: s.title, subject: s.subject, hasPdf: s.hasPdf, updatedAt: s.updatedAt, createdAt: s.createdAt, minutes: Math.round(ev.reduce((a, e) => a + e.secs, 0) / 60),
       sessions: ev.length, open: ev.filter(e => !e.done).map(e => e.kind), avg: scored.length ? Math.round(scored.reduce((a, e) => a + e.score, 0) / scored.length * 100) : null,
       lastAt: Math.max(s.updatedAt, ...ev.map(e => e.at)), questions: s.chat.length >> 1, quizzes: by('quiz').length, interviews: by('interview').length, challenges: by('code').length,
-      weak: scored.filter(e => e.score < 0.6).slice(0, 3).map(e => e.title) };
+      weak: scored.filter(e => e.score < 0.6).slice(0, 3).map(e => e.title), goal: s.goal || null };
   }).sort((a, b) => b.lastAt - a.lastAt);
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - 6 + i); return { day: localDay(d), minutes: 0 }; });
   for (const e of evs) { const d = days.find(x => x.day === localDay(e.at)); if (d) d.minutes += e.secs / 60; } // ponytail: whole session credited to its start day
@@ -167,14 +169,15 @@ app.get('/api/dashboard', (req, res) => res.json(dashboard()));
 const NO_STUDY = { id: '_', title: 'Dashboard', subject: "the learner's overall progress across all studies" };
 app.post('/api/coach', async (req, res) => {
   const p = readJson(PROFILE, {}), d = dashboard();
-  const key = JSON.stringify([p.updatedAt, d.streak, d.studies.map(s => [s.id, s.sessions, s.avg, s.minutes])]);
+  const key = JSON.stringify([p.updatedAt, d.streak, d.studies.map(s => [s.id, s.sessions, s.avg, s.minutes, s.goal?.kind, s.goal?.target])]);
   const cached = readJson(COACH, null);
   if (!req.body?.force && cached?.key === key) return res.json({ ...cached.plan, at: cached.at, cached: true });
-  const stats = d.studies.map(s => `- ${s.title} (id ${s.id})${s.subject ? `: ${s.subject}` : ''} · ${s.minutes} min · ${s.quizzes} quizzes, ${s.interviews} interviews, ${s.challenges} challenges, ${s.questions} questions asked · avg score ${s.avg ?? 'n/a'}% · open sessions: ${s.open.join(', ') || 'none'} · last ${Math.round((Date.now() - s.lastAt) / 864e5)} days ago${s.weak.length ? ` · weak: ${s.weak.join('; ')}` : ''}`).join('\n') || '(no studies yet)';
+  const stats = d.studies.map(s => `- ${s.title} (id ${s.id})${s.subject ? `: ${s.subject}` : ''} · ${s.minutes} min · ${s.interviews} interviews, ${s.challenges} challenges, ${s.questions} questions asked · avg score ${s.avg ?? 'n/a'}% · open sessions: ${s.open.join(', ') || 'none'} · last ${Math.round((Date.now() - s.lastAt) / 864e5)} days ago${s.weak.length ? ` · weak: ${s.weak.join('; ')}` : ''}`).join('\n') || '(no studies yet)';
   const prompt = `You are the learner's personal study coach. Learner: ${p.name || 'unknown name'}. Current role / background: ${p.career || 'not given'}. Goal: ${p.goal || 'not given'}. Target: ${p.hoursPerWeek || 5} hours/week. Notes from them: ${p.notes || 'none'}.
 Today: ${localDay(Date.now())}. Streak: ${d.streak} days. This week: ${d.weekMinutes} minutes. Total: ${d.totalMinutes} minutes.
+${app.locals.coachContext?.() || ''}
 Studies:\n${stats}\nRecent sessions:\n${d.events.slice(0, 8).map(e => `- ${localDay(e.at)} ${e.kind} "${e.title}" in ${e.study}: ${e.score == null ? 'not scored' : Math.round(e.score * 100) + '%'}${e.done ? '' : ' (unfinished)'}`).join('\n') || '- none'}
-Never mention ids in any text field (use studyId fields for that). Be concrete and honest; base advice on the numbers (weak scores, neglected studies, unfinished sessions, gap between goal and what they study). Address them by first name. Respond with ONLY JSON: {"headline": string (one motivating line, max 12 words), "next": {"studyId": string|null, "title": string, "why": string (1-2 lines), "tool": "quiz"|"interview"|"code"|"ask"|"new", "topic": string}, "todos": [4-6 of {"text": string, "tool": "quiz"|"interview"|"code"|"ask"|"new", "studyId": string|null}], "tips": [3 short concrete tips to get better, each mentioning a specific study or habit], "suggestNew": [2-3 of {"title": string, "subject": string (one-line scope), "why": string}] (subjects worth adding given their goal), "nudge": string (one-line reminder to keep going)}`;
+The tools that exist are: interview (adaptive oral exam), code challenge, review (spaced-repetition flashcards and missed questions) and ask (chat about the material). There is no quiz tool; never suggest a quiz. Never mention ids in any text field (use studyId fields for that). Be concrete and honest; base advice on the numbers (weak scores, neglected studies, unfinished sessions, gap between goal and what they study). Address them by first name. Respond with ONLY JSON: {"headline": string (one motivating line, max 12 words), "next": {"studyId": string|null, "title": string, "why": string (1-2 lines), "tool": "interview"|"code"|"ask"|"review"|"new", "topic": string}, "todos": [4-6 of {"text": string, "tool": "interview"|"code"|"ask"|"review"|"new", "studyId": string|null}], "tips": [3 short concrete tips to get better, each mentioning a specific study or habit], "suggestNew": [2-3 of {"title": string, "subject": string (one-line scope), "why": string}] (subjects worth adding given their goal), "nudge": string (one-line reminder to keep going)}`;
   try { const plan = await json(NO_STUDY, prompt); fs.writeFileSync(COACH, JSON.stringify({ key, at: Date.now(), plan })); res.json({ ...plan, at: Date.now() }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -215,29 +218,12 @@ app.post('/api/show-in-folder', (req, res) => { app.showInFolder?.(req.body.path
 app.post('/api/studies/:id/chat', async (req, res) => {
   const s = study(req.params.id);
   s.chat.push({ role: 'user', content: req.body.message });
-  const text = await streamText(res, s, s.chat);
+  const text = await streamText(res, s, s.chat, s.hasPdf ? { system: `${context(s).system}\n\nWhen part of an answer comes from the PDF, cite the page inline as (p. N), using the PDF's page number.` } : undefined);
   s.chat.push({ role: 'assistant', content: text || '*(stopped)*' }); touch(s); // never store an empty turn: the API rejects empty content
 });
 app.delete('/api/studies/:id/chat', (req, res) => { const s = study(req.params.id); s.chat = []; touch(s); res.json({ ok: true }); });
 
-// ---------- quiz (persisted: answers, timer and grade are saved so a quiz can be resumed or reviewed) ----------
-const findQz = (s, qid) => s.quizzes.find(q => q.id === qid);
-app.post('/api/studies/:id/quiz', async (req, res) => {
-  const s = study(req.params.id); const { n = 8, difficulty = 'mixed', topic = '' } = req.body;
-  try {
-    const q = await json(s, `Write a ${n}-question multiple-choice quiz on the study material${topic ? ` focused on: ${topic}` : ''}. Difficulty: ${difficulty}. Cover different parts of the material, avoid trivia. Respond with ONLY JSON: {"title": string, "questions": [{"q": string, "choices": [4 strings], "answer": index 0-3, "explanation": string}]}`);
-    Object.assign(q, { id: Date.now().toString(36), at: Date.now(), difficulty, topic, status: 'open', picked: Array(q.questions.length).fill(-1), elapsed: 0, score: null, total: q.questions.length });
-    s.quizzes.push(q); touch(s); res.json(q);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-// progress autosave: picked, elapsed, status, score
-app.post('/api/studies/:id/quiz/:qid', (req, res) => {
-  const s = study(req.params.id), q = findQz(s, req.params.qid); if (!q) return res.status(404).json({ error: 'no such quiz' });
-  for (const k of ['picked', 'elapsed', 'status', 'score']) if (k in req.body) q[k] = req.body[k];
-  save(s); res.json({ ok: true });
-});
-app.delete('/api/studies/:id/quiz/:qid', (req, res) => { const s = study(req.params.id); s.quizzes = s.quizzes.filter(q => q.id !== req.params.qid); touch(s); res.json({ ok: true }); });
-
+// Quiz was removed (the interview covers it). Past quiz records stay in study.json: they still count in stats, review cards and exports.
 // ---------- interview (endless wizard: one question at a time, graded, next question built on the answers) ----------
 const findIv = (s, iid) => (s.interviews ||= []).find(i => i.id === iid);
 const nextQ = n => ({ q: n.q, type: n.type === 'choice' && n.choices?.length ? 'choice' : 'text', choices: n.choices || null, answerIndex: n.answer ?? null });
@@ -276,6 +262,32 @@ app.post('/api/studies/:id/interviews/:iid', (req, res) => {
   if (['open', 'ended'].includes(req.body.status)) iv.status = req.body.status;
   save(s); res.json({ ok: true });
 });
+// coaching report for a finished interview: analysis + learning resources found by web search.
+// Every link is verified by linkcheck.js before it is saved; unverifiable ones are dropped.
+const reportPrompt = (iv, avoid = []) => `${ivBase(iv)}The interview is over. Coach this learner honestly, based only on the transcript above.
+Use web search to find real, currently available learning resources that fix this learner's weak spots (if they did well, resources that take them deeper). Copy every URL exactly from a search result; never guess or build a URL.
+Include at least 3 YouTube videos, 2 YouTube playlists, 2 GitHub repositories and 2 online quizzes or practice question sets, then any strong articles. Prefer resources in ${iv.language} when good ones exist, otherwise English.${avoid.length ? `\nThese URLs did not work, do not use them: ${avoid.join(' ')}` : ''}
+Respond with ONLY JSON: {"summary": string (2-3 lines), "level": "strong"|"solid"|"developing"|"struggling", "strengths": [strings], "weaknesses": [strings, each a specific concept they got wrong], "tips": [4-6 concrete, actionable steps to improve], "resources": [10-14 of {"kind": "video"|"playlist"|"repo"|"quiz"|"article", "title": string, "url": string, "why": string (one line: which weakness it fixes)}]}`;
+app.post('/api/studies/:id/interviews/:iid/report', async (req, res) => {
+  const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv) return res.status(404).json({ error: 'no such interview' });
+  if (!iv.turns.length) return res.status(400).json({ error: 'Answer at least one question first.' });
+  const ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+  try {
+    // a long web-search reply occasionally comes back as broken JSON: ask once more before giving up
+    const ask = avoid => json(s, reportPrompt(iv, avoid), undefined, { web: true, signal: ac.signal }).catch(e => e instanceof SyntaxError && !ac.signal.aborted ? json(s, reportPrompt(iv, avoid) + '\nYour previous reply was not valid JSON. Escape every double quote inside strings.', undefined, { web: true, signal: ac.signal }) : Promise.reject(e));
+    const r = await ask();
+    let resources = await verify(r.resources), asked = (r.resources || []).length;
+    if (resources.length < 6 && !ac.signal.aborted) { // one retry for the gaps, told which links failed
+      const bad = (r.resources || []).map(x => x.url).filter(u => !resources.some(v => v.url === u));
+      const more = await ask(bad);
+      asked += (more.resources || []).length; resources = await verify([...resources, ...(more.resources || [])]);
+    }
+    if (ac.signal.aborted) return;
+    const s2 = study(req.params.id), iv2 = findIv(s2, req.params.iid); if (!iv2) return res.status(404).json({ error: 'no such interview' }); // re-read: a minute passed, keep other saves
+    iv2.report = { at: Date.now(), turns: iv.turns.length, summary: String(r.summary || ''), level: r.level || '', strengths: r.strengths || [], weaknesses: r.weaknesses || [], tips: r.tips || [], resources, dropped: Math.max(0, asked - resources.length) };
+    touch(s2); res.json(iv2);
+  } catch (e) { if (!ac.signal.aborted) res.status(500).json({ error: e instanceof SyntaxError ? 'The coach reply came back garbled twice. Try again.' : e.message }); }
+});
 app.delete('/api/studies/:id/interviews/:iid', (req, res) => { const s = study(req.params.id); s.interviews = (s.interviews || []).filter(i => i.id !== req.params.iid); touch(s); res.json({ ok: true }); });
 
 // ---------- code challenges ----------
@@ -291,19 +303,18 @@ const LANGS = {
   // C#: dotnet needs a project, so one console project is created once under DATA and reused (build is incremental).
   csharp: { file: 'Program.cs', cached: true, build: d => ['dotnet', ['build', d, '-c', 'Release', '--nologo', '-v', 'q']], run: d => ['dotnet', [`${d}/bin/Release/net8.0/${path.basename(d)}.dll`]], note: 'Top-level statements are fine (no class needed); target .NET 8.' },
   rust: { file: 'main.rs', build: d => ['rustc', ['-O', '-o', `${d}/a.out`, `${d}/main.rs`]], run: d => [`${d}/a.out`, []] },
-  csharp: { file: 'Program.cs', extra: { 'main.csproj': '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>disable</Nullable><TreatWarningsAsErrors>false</TreatWarningsAsErrors></PropertyGroup></Project>' },
-    build: d => ['dotnet', ['build', d, '-c', 'Release', '-o', `${d}/out`, '-nologo', '-v', 'q']], run: d => ['dotnet', [`${d}/out/main.dll`]], note: 'Use top-level statements (no namespace/class needed) and Console.In / Console.Out.' },
 };
 const LIMITS = { easy: 15, medium: 30, hard: 45 }; // suggested minutes
 const findCh = (s, cid) => s.challenges.find(c => c.id === cid);
+async function makeChallenge(s, { language = 'javascript', difficulty = 'medium', topic = '' }, lead = '') {
+  const c = await json(s, `${lead ? `${lead}\n\n` : ''}Create one HackerRank-style coding challenge that exercises the study material${topic ? ` (topic: ${topic})` : ''}. Difficulty: ${difficulty}. Language: ${language}. ${LANGS[language].note || ''} The program is a single file that reads ALL input from stdin and prints the answer to stdout. Give 5 tests with exact stdin and exact expected stdout (trailing newline optional). Starter code must read stdin and contain a TODO. Respond with ONLY JSON: {"title": string, "statement": markdown string with problem, input format, output format, constraints, "examples": [{"input": string, "output": string, "explanation": string}], "starter": string, "tests": [{"input": string, "output": string}]}`);
+  Object.assign(c, { id: Date.now().toString(36), at: Date.now(), language, difficulty, limitMin: LIMITS[difficulty] || 30, code: c.starter, chat: [], elapsed: 0, status: 'open', passed: null, total: c.tests.length });
+  s.challenges.push(c); touch(s); return c;
+}
 app.post('/api/studies/:id/challenge', async (req, res) => {
-  const s = study(req.params.id); const { language = 'javascript', difficulty = 'medium', topic = '' } = req.body;
-  if (!LANGS[language]) return res.status(400).json({ error: 'unsupported language' });
-  try {
-    const c = await json(s, `Create one HackerRank-style coding challenge that exercises the study material${topic ? ` (topic: ${topic})` : ''}. Difficulty: ${difficulty}. Language: ${language}. ${LANGS[language].note || ''} The program is a single file that reads ALL input from stdin and prints the answer to stdout. Give 5 tests with exact stdin and exact expected stdout (trailing newline optional). Starter code must read stdin and contain a TODO. Respond with ONLY JSON: {"title": string, "statement": markdown string with problem, input format, output format, constraints, "examples": [{"input": string, "output": string, "explanation": string}], "starter": string, "tests": [{"input": string, "output": string}]}`);
-    Object.assign(c, { id: Date.now().toString(36), at: Date.now(), language, difficulty, limitMin: LIMITS[difficulty] || 30, code: c.starter, chat: [], elapsed: 0, status: 'open', passed: null, total: c.tests.length });
-    s.challenges.push(c); touch(s); res.json(c);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  const s = study(req.params.id);
+  if (!LANGS[req.body.language || 'javascript']) return res.status(400).json({ error: 'unsupported language' });
+  try { res.json(await makeChallenge(s, req.body)); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // progress autosave: code, elapsed, status, passed
 app.post('/api/studies/:id/challenge/:cid', (req, res) => {
@@ -328,7 +339,6 @@ app.post('/api/run', async (req, res) => {
   const dir = L.cached ? csDir : fs.mkdtempSync(path.join(os.tmpdir(), 'cram-run-'));
   try {
     fs.writeFileSync(path.join(dir, L.file), code);
-    for (const [f, body] of Object.entries(L.extra || {})) fs.writeFileSync(path.join(dir, f), body);
     if (L.build) { const b = await exec(...L.build(dir), '', 60000); if (b.code !== 0) { const msg = (b.err || b.out || 'compile failed').split('\n').filter(l => /error|warning|\^|:\d+/.test(l) || l.trim()).slice(0, 12).join('\n'); return res.json({ results: tests.map(t => ({ ...t, out: '', err: msg, code: b.code, pass: false })), passed: 0, compileError: msg }); } }
     const results = [];
     for (const t of tests) { const r = await exec(...L.run(dir), t.input); results.push({ ...t, ...r, pass: r.out === t.output.trim() }); }
@@ -351,6 +361,8 @@ app.post('/api/studies/:id/challenge/:cid/review', async (req, res) => {
   await streamText(res, s, [{ role: 'user', content: `Review my solution. Give: correctness verdict, bugs or edge cases missed, time/space complexity, how it relates to the study material, and a cleaner reference solution. Be direct.\n\n${chCtx(c, code, results)}` }]);
   c.code = code; if (results) { c.passed = results.passed; if (results.passed === results.results.length) c.status = 'solved'; } touch(s);
 });
+
+require('./features')(app, { study, save, touch, json, context, DATA, STUDIES, PROFILE, COACH, NO_STUDY, readJson, localDay, events, loadNotes, saveNotes, makeChallenge });
 
 module.exports = app;
 if (require.main === module) app.listen(3000, '127.0.0.1', () => console.log('http://localhost:3000'));
