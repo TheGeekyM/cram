@@ -11,8 +11,8 @@
   --c-panel:      30 31 34;      /* #1e1f22 — island surface */
   --c-panel-2:    43 45 49;      /* #2b2d31 — elevated tile */
   --c-border:     48 50 55;      /* #303237 — soft island edge */
-  --c-accent:     229 57 53;     /* #e53935 — red accent */
-  --c-accent-dim: 198 40 40;     /* #c62828 — hover/press */
+  --c-accent:     245 197 24;    /* #f5c518 — yellow accent */
+  --c-accent-dim: 214 168 10;    /* #d6a80a — hover/press */
   --c-accent-2:   170 110 235;   /* #aa6eeb — purple, the hero-glow second color */
   --c-dim:        130 138 150;   /* #828a96 — muted secondary text */
   --c-success:    73 197 130;
@@ -42,8 +42,8 @@
   --c-panel:      255 255 255;
   --c-panel-2:    243 242 252;   /* #f3f2fc — elevated tile, faintly violet so it reads warm-white */
   --c-border:     216 212 238;   /* #d8d4ee — violet-tinted edge, still visible on white */
-  --c-accent:     183 28 28;     /* #b71c1c — red, deepened for the pale canvas */
-  --c-accent-dim: 150 20 20;     /* #961414 */
+  --c-accent:     161 122 0;     /* #a17a00 — yellow, deepened for the pale canvas */
+  --c-accent-dim: 128 96 0;      /* #806000 */
   --c-accent-2:   109 76 232;    /* #6d4ce8 — violet, the second brand colour and the canvas's lead hue */
   --c-dim:        92 96 122;     /* #5c607a — readable secondary text, cooled toward the violet canvas */
   --c-success:    21 128 61;     /* darker so green text/badges pass contrast on white */
