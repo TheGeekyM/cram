@@ -5,7 +5,12 @@ import { api } from '../api.js'
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
 const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-const LANGS = [['javascript', 'JavaScript'], ['python', 'Python']]
+// id must match server LANGS. [id, label, short badge, badge color, file ext]
+export const LANGS = [
+  ['javascript', 'JavaScript', 'JS', '#f7df1e', 'js'], ['typescript', 'TypeScript', 'TS', '#3178c6', 'ts'], ['python', 'Python', 'Py', '#3776ab', 'py'],
+  ['java', 'Java', 'Jv', '#e76f00', 'java'], ['cpp', 'C++', 'C++', '#00599c', 'cpp'], ['rust', 'Rust', 'Rs', '#dea584', 'rs'], ['php', 'PHP', 'php', '#777bb4', 'php'],
+]
+const langOf = id => LANGS.find(l => l[0] === id) || LANGS[0]
 const GLYPHS = ['{ }', '=>', 'O(n)', '[ ]', 'fn', '&&', '::', '//', 'λ', '0x', '</>', 'if', '∑', '++', '?:', 'ret']
 
 // ---------- empty state: floating glyph field + start card ----------
@@ -27,12 +32,22 @@ function Lobby({ study, onStart, onOpen, onDelete, busy }) {
             <p className="text-sm text-dim mt-1 max-w-md">One HackerRank-style problem built from your study material. Timer runs, tests are hidden until you run them, and a coach sits beside you.</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-center">
-            <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5">{LANGS.map(([v, l]) => <button key={v} onClick={() => setLang(v)} className={`text-xs px-3 py-1.5 rounded-md ${lang === v ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{l}</button>)}</div>
+          </div>
+          <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5 w-full max-w-2xl">
+            {LANGS.map(([v, l, badge, color]) => (
+              <button key={v} onClick={() => setLang(v)} className={`relative flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-xl border transition-all ${lang === v ? 'border-accent bg-accent/10 shadow-[0_0_0_3px_rgb(var(--c-accent)/.15)]' : 'border-border bg-app/60 hover:border-gray-500 hover:-translate-y-0.5'}`}>
+                <span className="w-9 h-9 rounded-lg grid place-items-center font-mono font-bold text-[12px] text-black" style={{ background: color }}>{badge}</span>
+                <span className={`text-[11px] ${lang === v ? 'text-white' : 'text-dim'}`}>{l}</span>
+                {lang === v && <span className="absolute top-1 right-1 w-3.5 h-3.5 rounded-full bg-accent text-app grid place-items-center"><Ico s={9} d={<path d="M20 6 9 17l-5-5"/>} /></span>}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap justify-center">
             <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5">{['easy', 'medium', 'hard'].map(v => <button key={v} onClick={() => setD(v)} className={`text-xs px-3 py-1.5 rounded-md capitalize ${d === v ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{v}</button>)}</div>
             <input className="input w-52" placeholder="Focus topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && onStart({ language: lang, difficulty: d, topic })} />
           </div>
-          <button disabled={busy} onClick={() => onStart({ language: lang, difficulty: d, topic })} className="btn btn-primary text-base px-6 py-2.5 shadow-[0_0_0_0_rgb(var(--c-accent)/.5)]" style={busy ? undefined : { animation: 'arena-pulse 2.4s ease-out infinite' }}>
-            {busy ? <><Spin /> Building your challenge…</> : <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} /> Start</>}
+          <button disabled={busy} onClick={() => onStart({ language: lang, difficulty: d, topic })} className="btn btn-primary flex flex-col items-center justify-center gap-1 w-32 h-20 text-base rounded-2xl" style={busy ? undefined : { animation: 'arena-pulse 2.4s ease-out infinite' }}>
+            {busy ? <><Spin /><span className="text-xs">Building…</span></> : <><Ico s={26} d={<path d="m6 3 14 9-14 9V3z"/>} /><span>Start</span></>}
           </button>
         </div>
       </div>
@@ -43,7 +58,7 @@ function Lobby({ study, onStart, onOpen, onDelete, busy }) {
             <div key={c.id} onClick={() => c.statement && onOpen(c)} className={`group flex items-center gap-3 px-2.5 py-2 rounded-md bg-app text-xs ${c.statement ? 'cursor-pointer hover:bg-white/5' : 'opacity-60'}`}>
               <span className={`w-2 h-2 rounded-full ${c.status === 'solved' ? 'bg-success' : c.status === 'given-up' ? 'bg-error' : 'bg-warning'}`} />
               <span className="flex-1 text-gray-100 truncate">{c.title}</span>
-              <span className="badge">{c.language}</span><span className="text-dim capitalize">{c.difficulty}</span>
+              <span className="badge">{langOf(c.language)[1]}</span><span className="text-dim capitalize">{c.difficulty}</span>
               <span className="text-dim font-mono">{fmt(c.elapsed || 0)}</span>
               <b className="text-white w-10 text-right">{c.passed ?? '–'}/{c.total}</b>
               <span className="text-dim">{new Date(c.at).toLocaleDateString()}</span>
@@ -127,7 +142,7 @@ function Arena({ study, ch, setCh, onExit }) {
     <div className="h-full flex flex-col gap-2.5 min-h-0">
       <div className="island px-3 py-2 flex items-center gap-3 flex-shrink-0">
         <button onClick={onExit} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center" title="Back"><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>
-        <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{ch.title}</div><div className="text-[11px] text-dim"><span className="capitalize">{ch.difficulty}</span> · {LANGS.find(l => l[0] === ch.language)?.[1]} · {ch.tests.length} tests</div></div>
+        <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{ch.title}</div><div className="text-[11px] text-dim"><span className="capitalize">{ch.difficulty}</span> · {langOf(ch.language)[1]} · {ch.tests.length} tests</div></div>
         {res && <span className={`badge ${res.passed === res.results.length ? 'badge-green' : 'badge-red'}`}>{res.passed} / {res.results.length}</span>}
         <Timer elapsed={elapsed} limitMin={ch.limitMin || 30} status={ch.status} />
         {ch.status === 'open' && <button onClick={giveUp} className="btn-tint btn-red">Give up</button>}
@@ -139,7 +154,7 @@ function Arena({ study, ch, setCh, onExit }) {
           {ch.examples.map((e, i) => <div key={i} className="mt-3"><b className="text-[10px] uppercase tracking-wider text-dim">Example {i + 1}</b><pre className="mt-1">Input:{'\n'}{e.input}{'\n'}Output:{'\n'}{e.output}</pre>{e.explanation && <p className="text-xs text-dim">{e.explanation}</p>}</div>)}
         </div>
         <div className="island flex flex-col min-h-0 overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border text-[11px] text-dim"><span className="font-mono">solution.{ch.language === 'python' ? 'py' : 'js'}</span><span className="ml-auto">{code.split('\n').length} lines</span></div>
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border text-[11px] text-dim"><span className="font-mono">solution.{langOf(ch.language)[4]}</span><span className="ml-auto">{code.split('\n').length} lines</span></div>
           <textarea dir="ltr" className="flex-1 min-h-[220px] bg-app text-gray-100 font-mono text-[13px] leading-relaxed p-3 outline-none resize-none whitespace-pre" spellCheck={false} value={code} onChange={e => setCode(e.target.value)} onKeyDown={tab} style={{ tabSize: 4 }} />
           <div className="border-t border-border p-2 flex flex-col gap-2 max-h-[45%] overflow-y-auto">
             <div className="flex items-center gap-2 flex-wrap">

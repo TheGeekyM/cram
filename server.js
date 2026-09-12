@@ -108,7 +108,7 @@ app.post('/api/studies', (req, res) => {
   const { title, subject, pdfPath } = req.body;
   if (!title?.trim()) return res.status(400).json({ error: 'title required' });
   if (pdfPath && fs.statSync(pdfPath).size > 30e6) return res.status(400).json({ error: 'PDF over 30 MB' });
-  const s = { id: Date.now().toString(36), title: title.trim(), subject: (subject || '').trim(), hasPdf: !!pdfPath, createdAt: Date.now(), updatedAt: Date.now(), chat: [], interview: [], quizzes: [], challenges: [] };
+  const s = { id: Date.now().toString(36), title: title.trim(), subject: (subject || '').trim(), hasPdf: !!pdfPath, createdAt: Date.now(), updatedAt: Date.now(), chat: [], interviews: [], quizzes: [], challenges: [] };
   fs.mkdirSync(path.join(STUDIES, s.id));
   if (pdfPath) fs.copyFileSync(pdfPath, path.join(STUDIES, s.id, 'source.pdf'));
   save(s); res.json(s);
@@ -167,26 +167,54 @@ app.post('/api/studies/:id/quiz', async (req, res) => {
 });
 app.post('/api/studies/:id/quiz/result', (req, res) => { const s = study(req.params.id); s.quizzes.push(req.body); touch(s); res.json({ ok: true }); });
 
-// ---------- interview ----------
-const INTERVIEW = `You are now running a spoken-style oral exam / job interview on the study material. Ask ONE question at a time. After each answer: give brief honest feedback (what was right, what was missing, the ideal answer in 2-4 lines), then ask the next question, going deeper or sideways based on the answer. Mix conceptual, applied and "explain it to me" questions. After 8 questions, stop and give a final report: score /10, strengths, gaps, what to revise. Start now with a one-line welcome and the first question.`;
-app.post('/api/studies/:id/interview', async (req, res) => {
-  const s = study(req.params.id);
-  if (req.body.reset) s.interview = [];
-  if (req.body.message) s.interview.push({ role: 'user', content: req.body.message });
-  const msgs = s.interview.length ? s.interview : [{ role: 'user', content: 'Begin the interview.' }];
-  const text = await streamText(res, s, msgs, { system: `${context(s).system}\n\n${INTERVIEW}` });
-  if (!s.interview.length) s.interview.push(msgs[0]);
-  s.interview.push({ role: 'assistant', content: text }); touch(s);
+// ---------- interview (endless wizard: one question at a time, graded, next question built on the answers) ----------
+const findIv = (s, iid) => (s.interviews ||= []).find(i => i.id === iid);
+const ivPrompt = (iv, answer) => `You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. Language: ${iv.language}. Write every question, choice and feedback in ${iv.language}.
+${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1} (${t.type}): ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}${iv.pending ? `Current question (${iv.pending.type}): ${iv.pending.q}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Then write` : 'Write'} the next question, building on the transcript: go deeper where the learner is strong, revisit gaps, never repeat a question. Type "choice" (4 choices, exactly one correct) or "text" (short open answer, explain-it-to-me style); alternate the two types. Respond with ONLY JSON: {"feedback": string|null, "correct": boolean|null, "score": number|null, "next": {"q": string, "type": "choice"|"text", "choices": [4 strings]|null, "answer": correct index|null}}`;
+app.post('/api/studies/:id/interviews', async (req, res) => {
+  const s = study(req.params.id); const { difficulty = 'medium', language = 'English' } = req.body;
+  const iv = { id: Date.now().toString(36), at: Date.now(), difficulty: String(difficulty).slice(0, 20), language: String(language).slice(0, 30), status: 'open', elapsed: 0, turns: [], pending: null };
+  try { iv.pending = (await json(s, ivPrompt(iv))).next; (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
+// answer the pending question: one call grades it and produces the next one
+app.post('/api/studies/:id/interviews/:iid/answer', async (req, res) => {
+  const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv?.pending) return res.status(404).json({ error: 'no open question' });
+  const { answer = '', secs = 0, elapsed } = req.body;
+  try {
+    const r = await json(s, ivPrompt(iv, answer));
+    iv.turns.push({ ...iv.pending, answer, secs, feedback: r.feedback || '', correct: !!r.correct, score: +r.score || 0, at: Date.now() });
+    iv.pending = r.next; if (elapsed != null) iv.elapsed = elapsed; touch(s); res.json(iv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// progress autosave: elapsed, status (open ↔ ended — an ended session can always be resumed)
+app.post('/api/studies/:id/interviews/:iid', (req, res) => {
+  const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv) return res.status(404).json({ error: 'no such interview' });
+  if ('elapsed' in req.body) iv.elapsed = +req.body.elapsed || 0;
+  if (['open', 'ended'].includes(req.body.status)) iv.status = req.body.status;
+  save(s); res.json({ ok: true });
+});
+app.delete('/api/studies/:id/interviews/:iid', (req, res) => { const s = study(req.params.id); s.interviews = (s.interviews || []).filter(i => i.id !== req.params.iid); touch(s); res.json({ ok: true }); });
 
 // ---------- code challenges ----------
-const RUNNERS = { javascript: ['node', '-e'], python: ['python3', '-c'] };
+// Languages: write to a temp dir, compile once (if needed), run every test against the binary.
+// ponytail: add a language = one line here + one entry in CodeArena.jsx LANGS.
+const LANGS = {
+  javascript: { file: 'main.js', run: d => ['node', [`${d}/main.js`]] },
+  typescript: { file: 'main.ts', run: d => ['node', [`${d}/main.ts`]] }, // Node 24 strips types natively
+  python: { file: 'main.py', run: d => ['python3', [`${d}/main.py`]] },
+  php: { file: 'main.php', run: d => ['php', [`${d}/main.php`]] },
+  java: { file: 'Main.java', build: d => ['javac', ['-d', d, `${d}/Main.java`]], run: d => ['java', ['-cp', d, 'Main']], note: 'The class must be `public class Main`.' },
+  cpp: { file: 'main.cpp', build: d => ['g++', ['-O2', '-std=c++17', '-o', `${d}/a.out`, `${d}/main.cpp`]], run: d => [`${d}/a.out`, []] },
+  rust: { file: 'main.rs', build: d => ['rustc', ['-O', '-o', `${d}/a.out`, `${d}/main.rs`]], run: d => [`${d}/a.out`, []] },
+};
 const LIMITS = { easy: 15, medium: 30, hard: 45 }; // suggested minutes
 const findCh = (s, cid) => s.challenges.find(c => c.id === cid);
 app.post('/api/studies/:id/challenge', async (req, res) => {
   const s = study(req.params.id); const { language = 'javascript', difficulty = 'medium', topic = '' } = req.body;
+  if (!LANGS[language]) return res.status(400).json({ error: 'unsupported language' });
   try {
-    const c = await json(s, `Create one HackerRank-style coding challenge that exercises the study material${topic ? ` (topic: ${topic})` : ''}. Difficulty: ${difficulty}. Language: ${language}. The program reads ALL input from stdin and prints the answer to stdout. Give 5 tests with exact stdin and exact expected stdout (trailing newline optional). Starter code must read stdin and contain a TODO. Respond with ONLY JSON: {"title": string, "statement": markdown string with problem, input format, output format, constraints, "examples": [{"input": string, "output": string, "explanation": string}], "starter": string, "tests": [{"input": string, "output": string}]}`);
+    const c = await json(s, `Create one HackerRank-style coding challenge that exercises the study material${topic ? ` (topic: ${topic})` : ''}. Difficulty: ${difficulty}. Language: ${language}. ${LANGS[language].note || ''} The program is a single file that reads ALL input from stdin and prints the answer to stdout. Give 5 tests with exact stdin and exact expected stdout (trailing newline optional). Starter code must read stdin and contain a TODO. Respond with ONLY JSON: {"title": string, "statement": markdown string with problem, input format, output format, constraints, "examples": [{"input": string, "output": string, "explanation": string}], "starter": string, "tests": [{"input": string, "output": string}]}`);
     Object.assign(c, { id: Date.now().toString(36), at: Date.now(), language, difficulty, limitMin: LIMITS[difficulty] || 30, code: c.starter, chat: [], elapsed: 0, status: 'open', passed: null, total: c.tests.length });
     s.challenges.push(c); touch(s); res.json(c);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -198,20 +226,26 @@ app.post('/api/studies/:id/challenge/:cid', (req, res) => {
   save(s); res.json({ ok: true });
 });
 app.delete('/api/studies/:id/challenge/:cid', (req, res) => { const s = study(req.params.id); s.challenges = s.challenges.filter(c => c.id !== req.params.cid); touch(s); res.json({ ok: true }); });
-const run = (language, code, input) => new Promise(r => {
-  const [bin, flag] = RUNNERS[language]; let out = '', err = '';
-  const p = spawn(bin, [flag, code], { timeout: 5000 });
+const exec = (cmd, args, input, timeout = 5000) => new Promise(r => {
+  let out = '', err = '';
+  const p = spawn(cmd, args, { timeout });
   p.stdout.on('data', d => out += d); p.stderr.on('data', d => err += d);
   p.on('close', code => r({ out: out.trim(), err: err.trim().slice(-800), code }));
   p.on('error', e => r({ out: '', err: e.message, code: -1 }));
   p.stdin.end(input);
 });
 app.post('/api/run', async (req, res) => {
-  const { language, code, tests = [] } = req.body;
-  if (!RUNNERS[language]) return res.status(400).json({ error: 'unsupported language' });
-  const results = [];
-  for (const t of tests) { const r = await run(language, code, t.input); results.push({ ...t, ...r, pass: r.out === t.output.trim() }); }
-  res.json({ results, passed: results.filter(r => r.pass).length });
+  const { language, code, tests = [] } = req.body; const L = LANGS[language];
+  if (!L) return res.status(400).json({ error: 'unsupported language' });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cram-run-'));
+  try {
+    fs.writeFileSync(path.join(dir, L.file), code);
+    if (L.build) { const b = await exec(...L.build(dir), '', 60000); if (b.code !== 0) return res.json({ results: tests.map(t => ({ ...t, out: '', err: b.err || 'compile failed', code: b.code, pass: false })), passed: 0, compileError: b.err }); }
+    const results = [];
+    for (const t of tests) { const r = await exec(...L.run(dir), t.input); results.push({ ...t, ...r, pass: r.out === t.output.trim() }); }
+    res.json({ results, passed: results.filter(r => r.pass).length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 const chCtx = (c, code, results) => `## Challenge: ${c.title} (${c.language}, ${c.difficulty})\n${c.statement}\n\nTests (stdin → expected stdout):\n${c.tests.map((t, i) => `${i + 1}. ${JSON.stringify(t.input)} → ${JSON.stringify(t.output)}`).join('\n')}\n\n## The learner's current code\n\`\`\`${c.language}\n${code}\n\`\`\`\n\n## Latest test run\n${results ? `${results.passed}/${results.results.length} passed.\n${results.results.map((r, i) => `Test ${i + 1}: ${r.pass ? 'PASS' : `FAIL (expected ${JSON.stringify(r.output)}, got ${JSON.stringify(r.out)}${r.err ? `, stderr: ${r.err}` : ''})`}`).join('\n')}` : 'Not run yet.'}`;
 // Coach chat: sees the challenge + live code; nudges, doesn't hand over the solution unless asked outright.
