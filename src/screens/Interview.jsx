@@ -86,7 +86,7 @@ function Turn({ t, i }) {
       <div className="flex items-center gap-2 text-xs"><span className={`w-2 h-2 rounded-full ${t.correct ? 'bg-success' : 'bg-error'}`} /><span className="text-dim">Q{i + 1} · {t.type === 'choice' ? 'multiple choice' : 'open answer'} · {fmt(t.secs || 0)}</span><b className={`ml-auto ${t.correct ? 'text-success' : 'text-error'}`}>{t.score}/10</b></div>
       <div className="text-sm font-medium text-gray-100">{t.q}</div>
       {t.type === 'choice' && t.choices ? (
-        <div className="flex flex-col gap-1">{t.choices.map((c, j) => { const mine = t.answer === c, right = j === t.answer_idx || j === t.answer; return <div key={j} className={`text-xs px-2.5 py-1.5 rounded-md border flex gap-2 ${j === t.answerIndex ? 'border-success bg-success/10' : mine && !t.correct ? 'border-error bg-error/10' : 'border-border'}`}><span className="text-dim font-mono">{'ABCD'[j]}</span><span>{c}</span>{mine && <span className="ml-auto text-[10px] text-dim">your pick</span>}</div> })}</div>
+        <div className="flex flex-col gap-1">{t.choices.map((c, j) => <div key={j} className={`text-xs px-2.5 py-1.5 rounded-md border flex gap-2 ${j === t.answerIndex ? 'border-success bg-success/10' : j === t.picked ? 'border-error bg-error/10' : 'border-border'}`}><span className="text-dim font-mono">{'ABCD'[j]}</span><span>{c}</span>{j === t.picked && <span className="ml-auto text-[10px] text-dim">your pick</span>}</div>)}</div>
       ) : <div className="text-sm px-3 py-2 rounded-lg bg-accent/10 border border-accent/25 whitespace-pre-wrap">{t.answer || <i className="text-dim">no answer</i>}</div>}
       {t.feedback && <div className="text-xs text-gray-300 border-l-2 border-accent pl-2.5 kb-rich"><Markdown text={t.feedback} /></div>}
     </div>
@@ -103,9 +103,9 @@ function Session({ study, iv, setIv, onExit }) {
   const submit = async () => {
     const answer = iv.pending.type === 'choice' ? (picked < 0 ? '' : `${'ABCD'[picked]}. ${iv.pending.choices[picked]}`) : text.trim()
     if (!answer && !confirm('Submit without an answer?')) return
-    setBusy(true); const r = await api.post(`${base}/answer`, { answer, secs: elapsed - qStart, elapsed }); setBusy(false)
+    setBusy(true); const r = await api.post(`${base}/answer`, { answer, picked: iv.pending.type === 'choice' ? picked : null, secs: elapsed - qStart, elapsed }); setBusy(false)
     if (r.error) return alert(r.error)
-    setIv({ ...r, elapsed }); setFb({ ...r.turns[r.turns.length - 1], pickedIndex: picked }); setPicked(-1); setText('')
+    setIv({ ...r, elapsed }); setFb(r.turns[r.turns.length - 1]); setPicked(-1); setText('')
   }
   const next = () => { setFb(null); setQStart(elapsed); box.current?.scrollTo({ top: 0, behavior: 'smooth' }) }
   const setStatus = status => { api.post(base, { status, elapsed }); setIv({ ...iv, status, elapsed }) }
@@ -136,7 +136,7 @@ function Session({ study, iv, setIv, onExit }) {
               <>
                 <div className={`flex items-center gap-2 text-sm font-semibold ${fb.correct ? 'text-success' : 'text-error'}`}><Ico s={18} d={fb.correct ? <path d="M20 6 9 17l-5-5"/> : <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>} />{fb.correct ? 'Correct' : 'Not quite'}<span className="ml-auto font-mono">{fb.score}/10</span></div>
                 <div className="text-sm text-gray-100">{fb.q}</div>
-                {fb.type === 'choice' && fb.choices && <div className="flex flex-col gap-1">{fb.choices.map((c, j) => <div key={j} className={`text-sm px-3 py-2 rounded-lg border flex gap-2.5 ${j === fb.answerIndex ? 'border-success bg-success/10' : j === fb.pickedIndex ? 'border-error bg-error/10' : 'border-border opacity-60'}`}><span className="text-dim font-mono text-xs pt-0.5">{'ABCD'[j]}</span><span>{c}</span></div>)}</div>}
+                {fb.type === 'choice' && fb.choices && <div className="flex flex-col gap-1">{fb.choices.map((c, j) => <div key={j} className={`text-sm px-3 py-2 rounded-lg border flex gap-2.5 ${j === fb.answerIndex ? 'border-success bg-success/10' : j === fb.picked ? 'border-error bg-error/10' : 'border-border opacity-60'}`}><span className="text-dim font-mono text-xs pt-0.5">{'ABCD'[j]}</span><span>{c}</span></div>)}</div>}
                 {fb.type === 'text' && <div className="text-sm px-3 py-2 rounded-lg bg-accent/10 border border-accent/25 whitespace-pre-wrap">{fb.answer || <i className="text-dim">no answer</i>}</div>}
                 <div className="text-sm text-gray-300 border-l-2 border-accent pl-3 kb-rich"><Markdown text={fb.feedback} /></div>
                 <div className="flex items-center gap-2"><button className="btn btn-primary" onClick={next} autoFocus>Next question <Ico d={<path d="m9 18 6-6-6-6"/>} /></button><button className="btn-ghost text-xs" onClick={end}>End here</button></div>

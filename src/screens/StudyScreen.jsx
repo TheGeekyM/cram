@@ -3,6 +3,7 @@ import NavBar from '../components/NavBar.jsx'
 import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
 import CodeArena from './CodeArena.jsx'
+import Interview from './Interview.jsx'
 
 const Ico = ({ d }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const TABS = [
@@ -63,21 +64,6 @@ function Ask({ study, setStudy }) {
   const clear = async () => { if (!confirm('Clear this chat?')) return; await api.del(`/api/studies/${study.id}/chat`); setStudy(s => ({ ...s, chat: [] })) }
   return <Chat msgs={msgs} onSend={send} busy={busy} placeholder="Ask anything about the material… (Enter to send)" empty="Answers come from the material first, then general knowledge."
     right={<button className="btn-tint btn-red" onClick={clear}>Clear</button>} />
-}
-
-// ---------- Interview ----------
-function Interview({ study, setStudy }) {
-  const [busy, setBusy] = useState(false); const [live, setLive] = useState(null)
-  const shown = study.interview.slice(1); const msgs = live ? [...shown, ...live] : shown
-  const go = async (message, reset) => {
-    setBusy(true); const pre = message ? [{ role: 'user', content: message }] : []; setLive([...pre, { role: 'assistant', content: '' }])
-    const text = await api.stream(`/api/studies/${study.id}/interview`, { message, reset }, t => setLive([...pre, { role: 'assistant', content: t }]))
-    setStudy(s => ({ ...s, interview: reset || !s.interview.length ? [{ role: 'user', content: 'Begin the interview.' }, { role: 'assistant', content: text }] : [...s.interview, ...pre, { role: 'assistant', content: text }] }))
-    setLive(null); setBusy(false)
-  }
-  useEffect(() => { if (!study.interview.length) go(null, true) }, []) // eslint-disable-line
-  return <Chat msgs={msgs} onSend={t => go(t, false)} busy={busy} placeholder="Your answer… (Enter to send)" empty="Oral exam: one question at a time, feedback after each answer, report after eight."
-    right={<button className="btn-tint btn-purple" onClick={() => go(null, true)} disabled={busy}>Restart</button>} />
 }
 
 // ---------- Quiz ----------

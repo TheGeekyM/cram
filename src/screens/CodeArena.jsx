@@ -8,7 +8,7 @@ const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60
 // id must match server LANGS. [id, label, short badge, badge color, file ext]
 export const LANGS = [
   ['javascript', 'JavaScript', 'JS', '#f7df1e', 'js'], ['typescript', 'TypeScript', 'TS', '#3178c6', 'ts'], ['python', 'Python', 'Py', '#3776ab', 'py'],
-  ['java', 'Java', 'Jv', '#e76f00', 'java'], ['cpp', 'C++', 'C++', '#00599c', 'cpp'], ['rust', 'Rust', 'Rs', '#dea584', 'rs'], ['php', 'PHP', 'php', '#777bb4', 'php'],
+  ['java', 'Java', 'Jv', '#e76f00', 'java'], ['cpp', 'C++', 'C++', '#00599c', 'cpp'], ['rust', 'Rust', 'Rs', '#dea584', 'rs'], ['csharp', 'C#', 'C#', '#a78bfa', 'cs'], ['php', 'PHP', 'php', '#777bb4', 'php'], ['csharp', 'C#', 'C#', '#512bd4', 'cs'],
 ]
 const langOf = id => LANGS.find(l => l[0] === id) || LANGS[0]
 const GLYPHS = ['{ }', '=>', 'O(n)', '[ ]', 'fn', '&&', '::', '//', 'λ', '0x', '</>', 'if', '∑', '++', '?:', 'ret']
@@ -33,7 +33,7 @@ function Lobby({ study, onStart, onOpen, onDelete, busy }) {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-center">
           </div>
-          <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5 w-full max-w-2xl">
+          <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 w-full max-w-2xl">
             {LANGS.map(([v, l, badge, color]) => (
               <button key={v} onClick={() => setLang(v)} className={`relative flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-xl border transition-all ${lang === v ? 'border-accent bg-accent/10 shadow-[0_0_0_3px_rgb(var(--c-accent)/.15)]' : 'border-border bg-app/60 hover:border-gray-500 hover:-translate-y-0.5'}`}>
                 <span className="w-9 h-9 rounded-lg grid place-items-center font-mono font-bold text-[12px] text-black" style={{ background: color }}>{badge}</span>

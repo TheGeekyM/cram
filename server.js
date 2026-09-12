@@ -169,22 +169,23 @@ app.post('/api/studies/:id/quiz/result', (req, res) => { const s = study(req.par
 
 // ---------- interview (endless wizard: one question at a time, graded, next question built on the answers) ----------
 const findIv = (s, iid) => (s.interviews ||= []).find(i => i.id === iid);
+const nextQ = n => ({ q: n.q, type: n.type === 'choice' && n.choices?.length ? 'choice' : 'text', choices: n.choices || null, answerIndex: n.answer ?? null });
 const ivPrompt = (iv, answer) => `You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. Language: ${iv.language}. Write every question, choice and feedback in ${iv.language}.
 ${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1} (${t.type}): ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}${iv.pending ? `Current question (${iv.pending.type}): ${iv.pending.q}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Then write` : 'Write'} the next question, building on the transcript: go deeper where the learner is strong, revisit gaps, never repeat a question. Type "choice" (4 choices, exactly one correct) or "text" (short open answer, explain-it-to-me style); alternate the two types. Respond with ONLY JSON: {"feedback": string|null, "correct": boolean|null, "score": number|null, "next": {"q": string, "type": "choice"|"text", "choices": [4 strings]|null, "answer": correct index|null}}`;
 app.post('/api/studies/:id/interviews', async (req, res) => {
   const s = study(req.params.id); const { difficulty = 'medium', language = 'English' } = req.body;
   const iv = { id: Date.now().toString(36), at: Date.now(), difficulty: String(difficulty).slice(0, 20), language: String(language).slice(0, 30), status: 'open', elapsed: 0, turns: [], pending: null };
-  try { iv.pending = (await json(s, ivPrompt(iv))).next; (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
+  try { iv.pending = nextQ((await json(s, ivPrompt(iv))).next); (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 // answer the pending question: one call grades it and produces the next one
 app.post('/api/studies/:id/interviews/:iid/answer', async (req, res) => {
   const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv?.pending) return res.status(404).json({ error: 'no open question' });
-  const { answer = '', secs = 0, elapsed } = req.body;
+  const { answer = '', picked = null, secs = 0, elapsed } = req.body;
   try {
     const r = await json(s, ivPrompt(iv, answer));
-    iv.turns.push({ ...iv.pending, answer, secs, feedback: r.feedback || '', correct: !!r.correct, score: +r.score || 0, at: Date.now() });
-    iv.pending = r.next; if (elapsed != null) iv.elapsed = elapsed; touch(s); res.json(iv);
+    iv.turns.push({ ...iv.pending, answer, picked, secs, feedback: r.feedback || '', correct: !!r.correct, score: +r.score || 0, at: Date.now() });
+    iv.pending = nextQ(r.next); if (elapsed != null) iv.elapsed = elapsed; touch(s); res.json(iv);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // progress autosave: elapsed, status (open ↔ ended — an ended session can always be resumed)
@@ -206,7 +207,11 @@ const LANGS = {
   php: { file: 'main.php', run: d => ['php', [`${d}/main.php`]] },
   java: { file: 'Main.java', build: d => ['javac', ['-d', d, `${d}/Main.java`]], run: d => ['java', ['-cp', d, 'Main']], note: 'The class must be `public class Main`.' },
   cpp: { file: 'main.cpp', build: d => ['g++', ['-O2', '-std=c++17', '-o', `${d}/a.out`, `${d}/main.cpp`]], run: d => [`${d}/a.out`, []] },
+  // C#: dotnet needs a project, so one console project is created once under DATA and reused (build is incremental).
+  csharp: { file: 'Program.cs', cached: true, build: d => ['dotnet', ['build', d, '-c', 'Release', '--nologo', '-v', 'q']], run: d => ['dotnet', [`${d}/bin/Release/net8.0/${path.basename(d)}.dll`]], note: 'Top-level statements are fine (no class needed); target .NET 8.' },
   rust: { file: 'main.rs', build: d => ['rustc', ['-O', '-o', `${d}/a.out`, `${d}/main.rs`]], run: d => [`${d}/a.out`, []] },
+  csharp: { file: 'Program.cs', extra: { 'main.csproj': '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>disable</Nullable><TreatWarningsAsErrors>false</TreatWarningsAsErrors></PropertyGroup></Project>' },
+    build: d => ['dotnet', ['build', d, '-c', 'Release', '-o', `${d}/out`, '-nologo', '-v', 'q']], run: d => ['dotnet', [`${d}/out/main.dll`]], note: 'Use top-level statements (no namespace/class needed) and Console.In / Console.Out.' },
 };
 const LIMITS = { easy: 15, medium: 30, hard: 45 }; // suggested minutes
 const findCh = (s, cid) => s.challenges.find(c => c.id === cid);
@@ -237,15 +242,18 @@ const exec = (cmd, args, input, timeout = 5000) => new Promise(r => {
 app.post('/api/run', async (req, res) => {
   const { language, code, tests = [] } = req.body; const L = LANGS[language];
   if (!L) return res.status(400).json({ error: 'unsupported language' });
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cram-run-'));
+  const csDir = path.join(DATA, 'csrun');
+  if (L.cached && !fs.existsSync(path.join(csDir, 'csrun.csproj'))) { const n = await exec('dotnet', ['new', 'console', '-o', csDir, '--force'], '', 120000); if (n.code !== 0) return res.json({ error: 'dotnet new failed: ' + n.err }); }
+  const dir = L.cached ? csDir : fs.mkdtempSync(path.join(os.tmpdir(), 'cram-run-'));
   try {
     fs.writeFileSync(path.join(dir, L.file), code);
+    for (const [f, body] of Object.entries(L.extra || {})) fs.writeFileSync(path.join(dir, f), body);
     if (L.build) { const b = await exec(...L.build(dir), '', 60000); if (b.code !== 0) return res.json({ results: tests.map(t => ({ ...t, out: '', err: b.err || 'compile failed', code: b.code, pass: false })), passed: 0, compileError: b.err }); }
     const results = [];
     for (const t of tests) { const r = await exec(...L.run(dir), t.input); results.push({ ...t, ...r, pass: r.out === t.output.trim() }); }
     res.json({ results, passed: results.filter(r => r.pass).length });
   } catch (e) { res.status(500).json({ error: e.message }); }
-  finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  finally { if (!L.cached) fs.rmSync(dir, { recursive: true, force: true }); }
 });
 const chCtx = (c, code, results) => `## Challenge: ${c.title} (${c.language}, ${c.difficulty})\n${c.statement}\n\nTests (stdin → expected stdout):\n${c.tests.map((t, i) => `${i + 1}. ${JSON.stringify(t.input)} → ${JSON.stringify(t.output)}`).join('\n')}\n\n## The learner's current code\n\`\`\`${c.language}\n${code}\n\`\`\`\n\n## Latest test run\n${results ? `${results.passed}/${results.results.length} passed.\n${results.results.map((r, i) => `Test ${i + 1}: ${r.pass ? 'PASS' : `FAIL (expected ${JSON.stringify(r.output)}, got ${JSON.stringify(r.out)}${r.err ? `, stderr: ${r.err}` : ''})`}`).join('\n')}` : 'Not run yet.'}`;
 // Coach chat: sees the challenge + live code; nudges, doesn't hand over the solution unless asked outright.
