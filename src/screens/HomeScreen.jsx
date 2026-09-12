@@ -135,7 +135,7 @@ function Dashboard({ profile, dash, coach, coaching, onCoach, onOpenTool, onNew,
           </div>
         </div>
         <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))` }}>{tiles.map(([v, l, c]) => <div key={l} className="island p-4"><div className={`text-2xl font-bold font-mono ${c || 'text-white'}`}>{v}</div><div className="text-[11px] uppercase tracking-wider text-dim truncate">{l}</div></div>)}</div>
-        <div><H right={named && <button onClick={() => onReport(true)} disabled={reporting} className="btn-tint"><span className={reporting ? 'animate-spin inline-flex' : 'inline-flex'}><Ico s={12} d={I.refresh} /></span>{reporting ? 'Writing…' : r ? 'Rewrite' : 'Write it now'}</button>}>Weekly report{report?.week && <span className="text-dim font-normal text-xs ml-2">week of {new Date(`${report.week}T12:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>}</H>
+        <div><H right={named && <button onClick={() => onReport(true)} disabled={reporting} className="btn-tint"><span className={reporting ? 'animate-spin inline-flex' : 'inline-flex'}><Ico s={12} d={I.refresh} /></span>{reporting ? 'Writing…' : r ? 'Rewrite' : 'Write it now'}</button>}>Weekly report{report?.week && <span className="text-dim font-normal text-xs ml-2">{(() => { const d = n => new Date(new Date(`${report.week}T12:00`).getTime() + n * 864e5).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); return `${d(-7)} – ${d(-1)}` })()}</span>}</H>
           {r ? <div className="island p-4 flex flex-col gap-3">
             <p className="text-sm text-gray-200" dir="auto">{r.summary}</p>
             <div className="flex gap-2 flex-wrap text-[11px]">
