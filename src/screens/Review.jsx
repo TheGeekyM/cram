@@ -64,9 +64,10 @@ function Session({ cards: initial, steps, onExit, onChanged }) {
   const [queue, setQueue] = useState(initial); const [i, setI] = useState(0); const [shown, setShown] = useState(false); const [pick, setPick] = useState(-1)
   const [counts, setCounts] = useState({ again: 0, hard: 0, good: 0, easy: 0 }); const [busy, setBusy] = useState(false); const requeued = useRef(new Set())
   const c = queue[i], done = i >= queue.length
+  const inFlight = useRef(false) // state would let two keypresses in one tick both pass and grade the card twice
   const grade = async g => {
-    if (!c || !shown || busy) return; setBusy(true)
-    const r = await api.post(`/api/review/${c.id}`, { grade: g }); setBusy(false)
+    if (!c || !shown || inFlight.current) return; inFlight.current = true; setBusy(true)
+    const r = await api.post(`/api/review/${c.id}`, { grade: g }); inFlight.current = false; setBusy(false)
     if (r.error) return alert(r.error)
     setCounts(x => ({ ...x, [g]: x[g] + 1 })); onChanged?.()
     if (g === 'again' && !requeued.current.has(c.id)) { requeued.current.add(c.id); setQueue(q => [...q, { ...c, step: r.step }]) }
