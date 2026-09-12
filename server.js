@@ -5,6 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const Anthropic = require('@anthropic-ai/sdk');
 const auth = require('./auth');
+const cli = require('./cli');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -22,12 +23,16 @@ const save = s => fs.writeFileSync(path.join(STUDIES, s.id, 'study.json'), JSON.
 const MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-haiku-4-5'];
 
 // ---------- settings ----------
-app.get('/api/settings', (req, res) => { const s = settings(); const source = auth.signedIn() ? 'claude' : (s.apiKey || process.env.ANTHROPIC_API_KEY) ? 'key' : null;
-  res.json({ ...s, apiKey: s.apiKey ? `${s.apiKey.slice(0, 10)}…${s.apiKey.slice(-4)}` : '', hasKey: !!source, source, models: MODELS }); });
+app.get('/api/settings', (req, res) => {
+  const s = settings();
+  const source = useCli() ? 'cli' : auth.signedIn() ? 'claude' : (s.apiKey || process.env.ANTHROPIC_API_KEY) ? 'key' : null;
+  res.json({ ...s, provider: s.provider || 'auto', cli: cli.available(), apiKey: s.apiKey ? `${s.apiKey.slice(0, 10)}…${s.apiKey.slice(-4)}` : '', hasKey: !!source, source, models: MODELS });
+});
 app.post('/api/settings', (req, res) => {
   const s = settings();
   if (req.body.apiKey && !req.body.apiKey.includes('…')) s.apiKey = req.body.apiKey.trim();
   if (MODELS.includes(req.body.model)) s.model = req.body.model;
+  if (['auto', 'api'].includes(req.body.provider)) s.provider = req.body.provider;
   fs.writeFileSync(SETTINGS, JSON.stringify(s)); res.json({ ok: true });
 });
 
@@ -37,6 +42,8 @@ app.post('/api/auth/code', async (req, res) => { try { await auth.exchange(req.b
 app.post('/api/auth/logout', (req, res) => { auth.logout(); res.json({ ok: true }); });
 
 // ---------- claude ----------
+// Provider order: Claude Code CLI (subscription, no API throttling) → OAuth token → API key.
+const useCli = () => (settings().provider || 'auto') !== 'api' && cli.available();
 // OAuth (subscription) first, API key as fallback. OAuth needs its beta flag on every request.
 async function client() {
   const tok = await auth.token();
@@ -48,8 +55,8 @@ const SYSTEM = `You are Cram, a sharp, friendly study tutor. Teach from the prov
 function context(s) {
   const pdf = path.join(STUDIES, s.id, 'source.pdf');
   const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.`;
-  if (!fs.existsSync(pdf)) return { system: `${SYSTEM}\n${intro}`, prefix: [] };
-  return { system: `${SYSTEM}\n${intro} The study material is the attached PDF.`, prefix: [
+  if (!fs.existsSync(pdf)) return { system: `${SYSTEM}\n${intro}`, prefix: [], pdf: null };
+  return { system: `${SYSTEM}\n${intro} The study material is the attached PDF.`, pdf, prefix: [
     { role: 'user', content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fs.readFileSync(pdf).toString('base64') }, cache_control: { type: 'ephemeral' } },
       { type: 'text', text: 'This is the study material.' }] },
@@ -63,6 +70,12 @@ const req = (s, messages, extra = {}) => {
 async function streamText(res, s, messages, extra) {
   res.set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   let text = '';
+  if (useCli()) {
+    const { system, pdf } = context(s);
+    const r = await cli.stream({ system: extra?.system || system, messages, model: settings().model || 'claude-opus-5', pdf, onDelta: d => { text += d; res.write(d); } });
+    if (!r.ok) res.write(`\n\n**Error:** ${r.message}`);
+    res.end(); return text;
+  }
   try {
     const { c, betas } = await client();
     const stream = c.beta.messages.stream({ ...req(s, messages, extra), betas });
@@ -73,9 +86,16 @@ async function streamText(res, s, messages, extra) {
   res.end(); return text;
 }
 async function json(s, prompt, extra) {
-  const { c, betas } = await client();
-  const r = await c.beta.messages.create({ ...req(s, [{ role: 'user', content: prompt }], extra), betas });
-  const text = r.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  let text;
+  if (useCli()) {
+    const { system, pdf } = context(s);
+    const r = await cli.stream({ system, messages: [{ role: 'user', content: prompt }], model: settings().model || 'claude-opus-5', pdf });
+    if (!r.ok) throw new Error(r.message); text = r.text;
+  } else {
+    const { c, betas } = await client();
+    const r = await c.beta.messages.create({ ...req(s, [{ role: 'user', content: prompt }], extra), betas });
+    text = r.content.filter(b => b.type === 'text').map(b => b.text).join('');
+  }
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/); // ponytail: JSON-in-prompt + regex extract, swap for output_config.format if it ever misparses
   return JSON.parse(m ? m[0] : text);
 }

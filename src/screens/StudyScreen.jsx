@@ -11,6 +11,15 @@ const TABS = [
   ['code', 'Code', <Ico d={<><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></>} />],
   ['notes', 'Notes', <Ico d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></>} />],
 ]
+function CopyBtn({ text }) {
+  const [done, setDone] = useState(false)
+  const copy = e => { e.stopPropagation(); navigator.clipboard.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200) }
+  return (
+    <button onClick={copy} title="Copy" className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-[11px] px-2 py-0.5 rounded-md bg-panel-2 border border-border text-dim hover:text-white flex items-center gap-1">
+      {done ? <><Ico d={<path d="M20 6 9 17l-5-5"/>} />Copied</> : <><Ico d={<><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></>} />Copy</>}
+    </button>
+  )
+}
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
 const Sel = ({ label, value, onChange, options }) => (
   <label className="text-xs text-dim flex items-center gap-1.5">{label}<select className="input w-auto py-1" value={value} onChange={e => onChange(e.target.value)}>{options.map(o => <option key={o[0] ?? o} value={o[0] ?? o}>{o[1] ?? o}</option>)}</select></label>
@@ -26,8 +35,8 @@ function Chat({ msgs, onSend, busy, placeholder, empty, right }) {
       <div className="flex items-center gap-2 px-1 pb-2"><span className="text-xs text-dim">{empty}</span><div className="flex-1" />{right}</div>
       <div className="flex-1 overflow-y-auto flex flex-col gap-2.5 pr-1">
         {msgs.map((m, i) => (
-          <div key={i} dir="auto" className={`max-w-[85%] px-3.5 py-2.5 rounded-xl text-sm border ${m.role === 'user' ? 'self-end bg-accent/10 border-accent/25 whitespace-pre-wrap' : 'self-start bg-panel border-border kb-rich'}`}>
-            {m.role === 'user' ? m.content : (m.content ? <Markdown text={m.content} /> : <Spin />)}
+          <div key={i} dir="auto" className={`group relative max-w-[85%] px-3.5 py-2.5 rounded-xl text-sm border ${m.role === 'user' ? 'self-end bg-accent/10 border-accent/25 whitespace-pre-wrap' : 'self-start bg-panel border-border kb-rich pr-16'}`}>
+            {m.role === 'user' ? m.content : (m.content ? <><Markdown text={m.content} /><CopyBtn text={m.content} /></> : <Spin />)}
           </div>
         ))}
         <div ref={end} />
@@ -154,7 +163,7 @@ function Code({ study, setStudy }) {
             </div>
             {res && <div className="flex flex-col gap-1.5">{res.results.map((r, i) => (
               <pre key={i} className={`text-[11px] rounded-lg border p-2 whitespace-pre-wrap ${r.pass ? 'border-success/50' : 'border-error/50'}`}><b>Test {i + 1}: {r.pass ? 'PASS' : 'FAIL'}</b>{'\n'}Input: {r.input}{'\n'}Expected: {r.output}{r.pass ? '' : `\nGot: ${r.out}${r.err ? `\n${r.err}` : ''}`}</pre>))}</div>}
-            {(review || reviewing) && <div className="kb-rich text-sm border-t border-border pt-3">{review ? <Markdown text={review} /> : <Spin />}</div>}
+            {(review || reviewing) && <div className="group relative kb-rich text-sm border-t border-border pt-3">{review ? <><Markdown text={review} /><CopyBtn text={review} /></> : <Spin />}</div>}
           </div>
         </div>
       )}
@@ -181,7 +190,7 @@ export default function StudyScreen({ study, setStudy, settings, onHome, onNotes
   return (
     <div className="h-full flex flex-col">
       <NavBar title={TABS.find(t => t[0] === tab)?.[1]} project={{ name: study.title }} onHome={onHome}
-        right={<span className={`badge ${settings?.hasKey ? 'badge-green' : 'badge-red'}`}>{settings?.hasKey ? `${settings.source === 'claude' ? 'Claude' : 'key'} · ${settings.model.replace('claude-', '')}` : 'not signed in'}</span>} />
+        right={<span className={`badge ${settings?.hasKey ? 'badge-green' : 'badge-red'}`}>{settings?.hasKey ? `${settings.source === 'cli' ? 'CLI' : settings.source === 'claude' ? 'Claude' : 'key'} · ${settings.model.replace('claude-', '')}` : 'not signed in'}</span>} />
       <div className="flex items-center gap-1 px-2.5 pt-2.5">
         <div className="flex gap-0.5 bg-panel border border-border rounded-lg p-0.5">
           {TABS.map(([id, label, icon]) => (
