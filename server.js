@@ -181,13 +181,23 @@ app.post('/api/studies/:id/interview', async (req, res) => {
 
 // ---------- code challenges ----------
 const RUNNERS = { javascript: ['node', '-e'], python: ['python3', '-c'] };
+const LIMITS = { easy: 15, medium: 30, hard: 45 }; // suggested minutes
+const findCh = (s, cid) => s.challenges.find(c => c.id === cid);
 app.post('/api/studies/:id/challenge', async (req, res) => {
   const s = study(req.params.id); const { language = 'javascript', difficulty = 'medium', topic = '' } = req.body;
   try {
     const c = await json(s, `Create one HackerRank-style coding challenge that exercises the study material${topic ? ` (topic: ${topic})` : ''}. Difficulty: ${difficulty}. Language: ${language}. The program reads ALL input from stdin and prints the answer to stdout. Give 5 tests with exact stdin and exact expected stdout (trailing newline optional). Starter code must read stdin and contain a TODO. Respond with ONLY JSON: {"title": string, "statement": markdown string with problem, input format, output format, constraints, "examples": [{"input": string, "output": string, "explanation": string}], "starter": string, "tests": [{"input": string, "output": string}]}`);
-    c.id = Date.now().toString(36); c.at = Date.now(); c.language = language; c.difficulty = difficulty; res.json(c);
+    Object.assign(c, { id: Date.now().toString(36), at: Date.now(), language, difficulty, limitMin: LIMITS[difficulty] || 30, code: c.starter, chat: [], elapsed: 0, status: 'open', passed: null, total: c.tests.length });
+    s.challenges.push(c); touch(s); res.json(c);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// progress autosave: code, elapsed, status, passed
+app.post('/api/studies/:id/challenge/:cid', (req, res) => {
+  const s = study(req.params.id), c = findCh(s, req.params.cid); if (!c) return res.status(404).json({ error: 'no such challenge' });
+  for (const k of ['code', 'elapsed', 'status', 'passed']) if (k in req.body) c[k] = req.body[k];
+  save(s); res.json({ ok: true });
+});
+app.delete('/api/studies/:id/challenge/:cid', (req, res) => { const s = study(req.params.id); s.challenges = s.challenges.filter(c => c.id !== req.params.cid); touch(s); res.json({ ok: true }); });
 const run = (language, code, input) => new Promise(r => {
   const [bin, flag] = RUNNERS[language]; let out = '', err = '';
   const p = spawn(bin, [flag, code], { timeout: 5000 });
@@ -203,11 +213,20 @@ app.post('/api/run', async (req, res) => {
   for (const t of tests) { const r = await run(language, code, t.input); results.push({ ...t, ...r, pass: r.out === t.output.trim() }); }
   res.json({ results, passed: results.filter(r => r.pass).length });
 });
-app.post('/api/studies/:id/challenge/review', async (req, res) => {
-  const s = study(req.params.id); const { challenge, code, results } = req.body;
-  const summary = results ? `Test results: ${results.passed}/${results.results.length} passed.\n${results.results.map((r, i) => `Test ${i + 1}: ${r.pass ? 'PASS' : `FAIL (expected ${JSON.stringify(r.output)}, got ${JSON.stringify(r.out)}${r.err ? `, stderr: ${r.err}` : ''})`}`).join('\n')}` : 'Tests not run.';
-  const text = await streamText(res, s, [{ role: 'user', content: `Review my ${challenge.language} solution to this challenge.\n\n## Challenge\n${challenge.title}\n${challenge.statement}\n\n## My code\n\`\`\`${challenge.language}\n${code}\n\`\`\`\n\n## ${summary}\n\nGive: correctness verdict, bugs or edge cases missed, complexity, how it relates to the study material, and a cleaner reference solution. Be direct.` }]);
-  s.challenges.push({ id: challenge.id, title: challenge.title, language: challenge.language, at: Date.now(), passed: results?.passed ?? null, total: results?.results?.length ?? challenge.tests.length }); touch(s);
+const chCtx = (c, code, results) => `## Challenge: ${c.title} (${c.language}, ${c.difficulty})\n${c.statement}\n\nTests (stdin → expected stdout):\n${c.tests.map((t, i) => `${i + 1}. ${JSON.stringify(t.input)} → ${JSON.stringify(t.output)}`).join('\n')}\n\n## The learner's current code\n\`\`\`${c.language}\n${code}\n\`\`\`\n\n## Latest test run\n${results ? `${results.passed}/${results.results.length} passed.\n${results.results.map((r, i) => `Test ${i + 1}: ${r.pass ? 'PASS' : `FAIL (expected ${JSON.stringify(r.output)}, got ${JSON.stringify(r.out)}${r.err ? `, stderr: ${r.err}` : ''})`}`).join('\n')}` : 'Not run yet.'}`;
+// Coach chat: sees the challenge + live code; nudges, doesn't hand over the solution unless asked outright.
+app.post('/api/studies/:id/challenge/:cid/chat', async (req, res) => {
+  const s = study(req.params.id), c = findCh(s, req.params.cid); if (!c) return res.status(404).end();
+  const { message, code, results } = req.body;
+  c.chat.push({ role: 'user', content: message });
+  const text = await streamText(res, s, c.chat, { system: `${context(s).system}\n\nYou are coaching the learner through a coding challenge. Be Socratic: hints, questions, pointers to the exact bug or edge case, small snippets at most. Give the full solution only if they explicitly ask for it. Keep replies short.\n\n${chCtx(c, code ?? c.code, results)}` });
+  c.chat.push({ role: 'assistant', content: text }); c.code = code ?? c.code; save(s);
+});
+app.post('/api/studies/:id/challenge/:cid/review', async (req, res) => {
+  const s = study(req.params.id), c = findCh(s, req.params.cid); if (!c) return res.status(404).end();
+  const { code, results } = req.body;
+  await streamText(res, s, [{ role: 'user', content: `Review my solution. Give: correctness verdict, bugs or edge cases missed, time/space complexity, how it relates to the study material, and a cleaner reference solution. Be direct.\n\n${chCtx(c, code, results)}` }]);
+  c.code = code; if (results) { c.passed = results.passed; if (results.passed === results.results.length) c.status = 'solved'; } touch(s);
 });
 
 module.exports = app;

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import NavBar from '../components/NavBar.jsx'
 import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
+import CodeArena from './CodeArena.jsx'
 
 const Ico = ({ d }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const TABS = [
@@ -124,54 +125,7 @@ function Quiz({ study, setStudy }) {
   )
 }
 
-// ---------- Code ----------
-function Code({ study, setStudy }) {
-  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState(''); const [busy, setBusy] = useState(false)
-  const [ch, setCh] = useState(null); const [code, setCode] = useState(''); const [res, setRes] = useState(null); const [running, setRunning] = useState(false); const [review, setReview] = useState(''); const [reviewing, setReviewing] = useState(false)
-  const gen = async () => {
-    setBusy(true); setCh(null); setRes(null); setReview(''); const c = await api.post(`/api/studies/${study.id}/challenge`, { language: lang, difficulty: d, topic }); setBusy(false)
-    if (c.error) return alert(c.error); setCh(c); setCode(c.starter)
-  }
-  const run = async () => { setRunning(true); const r = await api.post('/api/run', { language: ch.language, code, tests: ch.tests }); setRunning(false); if (r.error) return alert(r.error); setRes(r) }
-  const ask = async () => {
-    setReviewing(true); setReview('')
-    await api.stream(`/api/studies/${study.id}/challenge/review`, { challenge: ch, code, results: res }, setReview)
-    setReviewing(false); setStudy(await api.get(`/api/studies/${study.id}`))
-  }
-  const tab = e => { if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; setCode(code.slice(0, s) + '    ' + code.slice(t.selectionEnd)); requestAnimationFrame(() => t.selectionStart = t.selectionEnd = s + 4) } }
-  return (
-    <div className="flex flex-col gap-2.5 h-full min-h-0 overflow-y-auto">
-      <div className="island p-3 flex items-center gap-3 flex-wrap">
-        <Sel label="Language" value={lang} onChange={setLang} options={[['javascript', 'JavaScript'], ['python', 'Python']]} />
-        <Sel label="Difficulty" value={d} onChange={setD} options={['easy', 'medium', 'hard']} />
-        <input className="input flex-1 min-w-[160px]" placeholder="Focus topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} />
-        <button className="btn btn-primary" disabled={busy} onClick={gen}>{busy ? <><Spin /> Designing…</> : 'New challenge'}</button>
-      </div>
-      {ch && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
-          <div className="island p-4 kb-rich text-sm">
-            <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">{ch.title}<span className="badge badge-purple">{ch.language} · {ch.difficulty}</span></h3>
-            <Markdown text={ch.statement} />
-            {ch.examples.map((e, i) => <div key={i} className="mt-3"><b className="text-xs uppercase tracking-wider text-dim">Example {i + 1}</b><pre className="mt-1">Input:{'\n'}{e.input}{'\n'}Output:{'\n'}{e.output}</pre>{e.explanation && <p className="text-xs text-dim">{e.explanation}</p>}</div>)}
-          </div>
-          <div className="island p-4 flex flex-col gap-2.5">
-            <textarea className="input font-mono text-[13px] min-h-[320px] whitespace-pre" spellCheck={false} value={code} onChange={e => setCode(e.target.value)} onKeyDown={tab} style={{ tabSize: 4 }} />
-            <div className="flex items-center gap-2 flex-wrap">
-              <button className="btn btn-primary" disabled={running} onClick={run}>{running ? <Spin /> : 'Run tests'}</button>
-              <button className="btn-tint btn-purple" disabled={reviewing} onClick={ask}>Get review</button>
-              {res && <span className={`badge ${res.passed === res.results.length ? 'badge-green' : 'badge-red'}`}>{res.passed} / {res.results.length} passed</span>}
-            </div>
-            {res && <div className="flex flex-col gap-1.5">{res.results.map((r, i) => (
-              <pre key={i} className={`text-[11px] rounded-lg border p-2 whitespace-pre-wrap ${r.pass ? 'border-success/50' : 'border-error/50'}`}><b>Test {i + 1}: {r.pass ? 'PASS' : 'FAIL'}</b>{'\n'}Input: {r.input}{'\n'}Expected: {r.output}{r.pass ? '' : `\nGot: ${r.out}${r.err ? `\n${r.err}` : ''}`}</pre>))}</div>}
-            {(review || reviewing) && <div className="group relative kb-rich text-sm border-t border-border pt-3">{review ? <><Markdown text={review} /><CopyBtn text={review} /></> : <Spin />}</div>}
-          </div>
-        </div>
-      )}
-      <History title="Past challenges" rows={study.challenges.map(c => [c.title, c.language, `${c.passed ?? '–'}/${c.total}`, c.at])} />
-    </div>
-  )
-}
-
+// Code lives in its own file: lobby + arena + coach
 function History({ title, rows }) {
   return (
     <div className="island">
@@ -186,7 +140,7 @@ function History({ title, rows }) {
 
 export default function StudyScreen({ study, setStudy, settings, onHome, onNotes }) {
   const [tab, setTab] = useState('ask')
-  const body = { ask: <Ask study={study} setStudy={setStudy} />, quiz: <Quiz study={study} setStudy={setStudy} />, interview: <Interview study={study} setStudy={setStudy} />, code: <Code study={study} setStudy={setStudy} /> }
+  const body = { ask: <Ask study={study} setStudy={setStudy} />, quiz: <Quiz study={study} setStudy={setStudy} />, interview: <Interview study={study} setStudy={setStudy} />, code: <CodeArena study={study} setStudy={setStudy} /> }
   return (
     <div className="h-full flex flex-col">
       <NavBar title={TABS.find(t => t[0] === tab)?.[1]} project={{ name: study.title }} onHome={onHome}
