@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const Anthropic = require('@anthropic-ai/sdk');
+const auth = require('./auth');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -14,6 +15,7 @@ app.use('/vendor', express.static(path.join(__dirname, 'node_modules/marked/lib'
 const DATA = process.env.CRAM_DATA || path.join(__dirname, 'data');
 const STUDIES = path.join(DATA, 'studies');
 fs.mkdirSync(STUDIES, { recursive: true });
+auth.init(DATA, null); // main.js re-inits with safeStorage
 const SETTINGS = path.join(DATA, 'settings.json');
 const settings = () => fs.existsSync(SETTINGS) ? JSON.parse(fs.readFileSync(SETTINGS)) : { model: 'claude-opus-5' };
 const study = id => JSON.parse(fs.readFileSync(path.join(STUDIES, id, 'study.json')));
@@ -21,7 +23,8 @@ const save = s => fs.writeFileSync(path.join(STUDIES, s.id, 'study.json'), JSON.
 const MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-haiku-4-5'];
 
 // ---------- settings ----------
-app.get('/api/settings', (req, res) => { const s = settings(); res.json({ ...s, apiKey: s.apiKey ? `${s.apiKey.slice(0, 10)}…${s.apiKey.slice(-4)}` : '', hasKey: !!(s.apiKey || process.env.ANTHROPIC_API_KEY), models: MODELS }); });
+app.get('/api/settings', (req, res) => { const s = settings(); const source = auth.signedIn() ? 'claude' : (s.apiKey || process.env.ANTHROPIC_API_KEY) ? 'key' : null;
+  res.json({ ...s, apiKey: s.apiKey ? `${s.apiKey.slice(0, 10)}…${s.apiKey.slice(-4)}` : '', hasKey: !!source, source, models: MODELS }); });
 app.post('/api/settings', (req, res) => {
   const s = settings();
   if (req.body.apiKey && !req.body.apiKey.includes('…')) s.apiKey = req.body.apiKey.trim();
@@ -29,8 +32,18 @@ app.post('/api/settings', (req, res) => {
   fs.writeFileSync(SETTINGS, JSON.stringify(s)); res.json({ ok: true });
 });
 
+// ---------- sign in with Claude ----------
+app.post('/api/auth/start', (req, res) => { const url = auth.start(); app.openExternal?.(url); res.json({ url }); });
+app.post('/api/auth/code', async (req, res) => { try { await auth.exchange(req.body.code || ''); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/api/auth/logout', (req, res) => { auth.logout(); res.json({ ok: true }); });
+
 // ---------- claude ----------
-const client = () => new Anthropic({ apiKey: settings().apiKey || process.env.ANTHROPIC_API_KEY });
+// OAuth (subscription) first, API key as fallback. OAuth needs its beta flag on every request.
+async function client() {
+  const tok = await auth.token();
+  if (tok) return { c: new Anthropic({ authToken: tok }), betas: ['server-side-fallback-2026-07-01', auth.OAUTH_BETA] };
+  return { c: new Anthropic({ apiKey: settings().apiKey || process.env.ANTHROPIC_API_KEY }), betas: ['server-side-fallback-2026-07-01'] };
+}
 const SYSTEM = `You are Cram, a sharp, friendly study tutor. Teach from the provided material; where it is silent, use solid general knowledge and say so. Be concrete, use examples, keep answers tight. Use Markdown.`;
 // Stable prefix for prompt caching: PDF (if any) goes in the first user turn with cache_control
 function context(s) {
@@ -44,8 +57,7 @@ function context(s) {
     { role: 'assistant', content: 'Got it. I have read the material and am ready.' }] };
 }
 const req = (s, messages, extra = {}) => ({
-  model: settings().model || 'claude-opus-5', max_tokens: 16000,
-  betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+  model: settings().model || 'claude-opus-5', max_tokens: 16000, fallbacks: 'default',
   ...context(s), ...extra, messages: [...context(s).prefix, ...messages],
 });
 // stream text deltas straight to the HTTP response; returns full text
@@ -53,7 +65,8 @@ async function streamText(res, s, messages, extra) {
   res.set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
   let text = '';
   try {
-    const stream = client().beta.messages.stream(req(s, messages, extra));
+    const { c, betas } = await client();
+    const stream = c.beta.messages.stream({ ...req(s, messages, extra), betas });
     for await (const ev of stream) if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') { text += ev.delta.text; res.write(ev.delta.text); }
     const final = await stream.finalMessage();
     if (final.stop_reason === 'refusal') res.write('\n\n*(Claude declined this request.)*');
@@ -61,7 +74,8 @@ async function streamText(res, s, messages, extra) {
   res.end(); return text;
 }
 async function json(s, prompt, extra) {
-  const r = await client().beta.messages.create(req(s, [{ role: 'user', content: prompt }], extra));
+  const { c, betas } = await client();
+  const r = await c.beta.messages.create({ ...req(s, [{ role: 'user', content: prompt }], extra), betas });
   const text = r.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/); // ponytail: JSON-in-prompt + regex extract, swap for output_config.format if it ever misparses
   return JSON.parse(m ? m[0] : text);

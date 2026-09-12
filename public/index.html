@@ -130,7 +130,16 @@
 
 <dialog id="settings">
   <h3>Settings<button class="icon" onclick="settings.close()"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></h3>
-  <label>Anthropic API key</label><input id="sKey" placeholder="sk-ant-…">
+  <div class="card" style="padding:.8rem">
+    <div class="row"><b>Claude account</b><span style="flex:1"></span><span id="authState" class="badge"></span></div>
+    <div id="authOut" style="margin-top:.6rem">
+      <button class="primary" onclick="signIn()"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/></svg>Sign in with Claude</button>
+      <div id="codeBox" class="row" style="margin-top:.6rem" hidden><input id="authCode" placeholder="Paste the code from the browser page" style="flex:1"><button class="primary" onclick="submitCode()">Finish</button></div>
+      <p class="muted small" style="margin:.5rem 0 0">Uses your Claude subscription (Pro/Max), like Claude Code. A browser tab opens; copy the code it shows and paste it above.</p>
+    </div>
+    <div id="authIn" hidden style="margin-top:.6rem"><button onclick="signOut()">Sign out</button></div>
+  </div>
+  <label>Or: Anthropic API key (pay-as-you-go fallback)</label><input id="sKey" placeholder="sk-ant-…">
   <label>Model</label><select id="sModel"></select>
   <div class="row" style="margin-top:1rem;justify-content:flex-end"><button class="primary" onclick="saveSettings()">Save</button></div>
   <p class="muted small" style="margin:1rem 0 0">Cram by Mohamed Emad · <a href="mailto:thegeekym@gmail.com" style="color:var(--accent)">thegeekym@gmail.com</a></p>
@@ -267,9 +276,14 @@ function renderHist() {
 async function loadSettings() {
   const s = await api('/api/settings');
   $('sKey').value = s.apiKey; $('sModel').innerHTML = s.models.map(m => `<option ${m === s.model ? 'selected' : ''}>${m}</option>`).join('');
-  $('keyBadge').className = 'badge ' + (s.hasKey ? 'ok' : 'err'); $('keyBadge').textContent = s.hasKey ? s.model.replace('claude-', '') : 'no API key';
+  $('keyBadge').className = 'badge ' + (s.hasKey ? 'ok' : 'err'); $('keyBadge').textContent = s.hasKey ? `${s.source === 'claude' ? 'Claude' : 'key'} · ${s.model.replace('claude-', '')}` : 'not signed in';
+  $('authState').className = 'badge ' + (s.source === 'claude' ? 'ok' : ''); $('authState').textContent = s.source === 'claude' ? 'signed in' : 'signed out';
+  $('authOut').hidden = s.source === 'claude'; $('authIn').hidden = s.source !== 'claude';
   if (!s.hasKey) openSettings();
 }
+async function signIn() { await api('/api/auth/start', {}); $('codeBox').hidden = false; $('authCode').focus(); }
+async function submitCode() { const r = await api('/api/auth/code', { code: $('authCode').value }); if (r.error) return alert(r.error); $('authCode').value = ''; $('codeBox').hidden = true; loadSettings(); }
+async function signOut() { await api('/api/auth/logout', {}); loadSettings(); }
 function openSettings() { settings.showModal(); $('sKey').focus(); }
 async function saveSettings() { await api('/api/settings', { apiKey: $('sKey').value, model: $('sModel').value }); settings.close(); loadSettings(); }
 document.querySelectorAll('.composer textarea').forEach(t => t.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); t.id === 'askIn' ? ask() : answerInterview(); } });

@@ -1,8 +1,10 @@
-const { app, BrowserWindow, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, dialog, shell, Menu, safeStorage } = require('electron');
 process.env.CRAM_DATA = app.getPath('userData');
 const server = require('./server');
 
 app.whenReady().then(() => {
+  require('./auth').init(process.env.CRAM_DATA, safeStorage);
+  server.openExternal = url => shell.openExternal(url);
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'editMenu' }, { role: 'viewMenu' }]));
   const ctx = Menu.buildFromTemplate([{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' }]);
   server.pickPdf = async () => (await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] })).filePaths[0];
