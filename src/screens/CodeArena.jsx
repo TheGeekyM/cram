@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
+import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
+import { Centered, useSessions, StudySelect, BackBtn, Grid, Tile, Stats } from '../components/SessionList.jsx'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
@@ -14,13 +16,13 @@ export const LANGS = [
 const langOf = id => LANGS.find(l => l[0] === id) || LANGS[0]
 const GLYPHS = ['{ }', '=>', 'O(n)', '[ ]', 'fn', '&&', '::', '//', 'λ', '0x', '</>', 'if', '∑', '++', '?:', 'ret']
 
-// ---------- empty state: floating glyph field + start card ----------
-function Lobby({ study, onStart, onOpen, onDelete, busy }) {
-  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState('')
+// ---------- hero: floating glyph field + start card (whole page when the study has no challenges yet) ----------
+function Hero({ onStart, busy, studies }) {
+  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState(''); const [sid, setSid] = useState(studies[0]?.id || '')
+  const start = () => sid && onStart({ language: lang, difficulty: d, topic, studyId: sid })
   const glyphs = useMemo(() => GLYPHS.map((g, i) => ({ g, x: (i * 37) % 100, y: (i * 53) % 100, dur: 6 + (i % 5) * 1.5, delay: -(i * 0.7), size: 11 + (i % 4) * 3 })), [])
-  const past = [...study.challenges].reverse()
   return (
-    <div className="h-full flex flex-col gap-2.5 overflow-y-auto">
+    <div className="flex flex-col gap-2.5">
       <div className="island relative overflow-hidden flex-shrink-0" style={{ minHeight: 340 }}>
         <div className="absolute inset-0 pointer-events-none select-none" aria-hidden>
           {glyphs.map((p, i) => <span key={i} className="absolute font-mono text-accent/25" style={{ left: `${p.x}%`, top: `${p.y}%`, fontSize: p.size, animation: `arena-float ${p.dur}s ease-in-out ${p.delay}s infinite` }}>{p.g}</span>)}
@@ -32,8 +34,7 @@ function Lobby({ study, onStart, onOpen, onDelete, busy }) {
             <h2 className="text-xl font-semibold text-white">Ready for a challenge?</h2>
             <p className="text-sm text-dim mt-1 max-w-md">One HackerRank-style problem built from your study material. Timer runs, tests are hidden until you run them, and a coach sits beside you.</p>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-center">
-          </div>
+          <StudySelect studies={studies} value={sid} onChange={setSid} />
           <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 w-full max-w-2xl">
             {LANGS.map(([v, l, badge, color]) => (
               <button key={v} onClick={() => setLang(v)} className={`relative flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-xl border transition-all ${lang === v ? 'border-accent bg-accent/10 shadow-[0_0_0_3px_rgb(var(--c-accent)/.15)]' : 'border-border bg-app/60 hover:border-gray-500 hover:-translate-y-0.5'}`}>
@@ -45,36 +46,31 @@ function Lobby({ study, onStart, onOpen, onDelete, busy }) {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-center">
             <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5">{['easy', 'medium', 'hard'].map(v => <button key={v} onClick={() => setD(v)} className={`text-xs px-3 py-1.5 rounded-md capitalize ${d === v ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{v}</button>)}</div>
-            <input className="input w-52" placeholder="Focus topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && onStart({ language: lang, difficulty: d, topic })} />
+            <input className="input w-52" placeholder="Focus topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && start()} />
           </div>
-          <button disabled={busy} onClick={() => onStart({ language: lang, difficulty: d, topic })} className="btn btn-primary flex flex-col items-center justify-center gap-1 w-32 h-20 text-base rounded-2xl" style={busy ? undefined : { animation: 'arena-pulse 2.4s ease-out infinite' }}>
-            {busy ? <><Spin /><span className="text-xs">Building…</span></> : <><Ico s={26} d={<path d="m6 3 14 9-14 9V3z"/>} /><span>Start</span></>}
+          <button disabled={busy || !sid} onClick={start} className="btn btn-primary flex flex-col items-center justify-center gap-1 w-32 h-20 text-base rounded-2xl" style={busy ? undefined : { animation: 'arena-pulse 2.4s ease-out infinite' }}>
+            {busy ? <span className="text-xs flex flex-col items-center gap-0.5"><Wait label="Building…" /></span> : <><Ico s={26} d={<path d="m6 3 14 9-14 9V3z"/>} /><span>Start</span></>}
           </button>
         </div>
       </div>
-      <div className="island">
-        <div className="panel-header">Your challenges</div>
-        <div className="p-2 flex flex-col gap-1">
-          {past.length ? past.map(c => (
-            <div key={c.id} onClick={() => c.statement && onOpen(c)} className={`group flex items-center gap-3 px-2.5 py-2 rounded-md bg-app text-xs ${c.statement ? 'cursor-pointer hover:bg-white/5' : 'opacity-60'}`}>
-              <span className={`w-2 h-2 rounded-full ${c.status === 'solved' ? 'bg-success' : c.status === 'given-up' ? 'bg-error' : 'bg-warning'}`} />
-              <span className="flex-1 text-gray-100 truncate">{c.title}</span>
-              <span className="badge">{langOf(c.language)[1]}</span><span className="text-dim capitalize">{c.difficulty}</span>
-              <span className="text-dim font-mono">{fmt(c.elapsed || 0)}</span>
-              <b className="text-white w-10 text-right">{c.passed ?? '–'}/{c.total}</b>
-              <span className="text-dim">{new Date(c.at).toLocaleDateString()}</span>
-              <button onClick={e => { e.stopPropagation(); onDelete(c) }} className="w-6 h-6 rounded text-dim opacity-0 group-hover:opacity-100 hover:text-error hover:bg-white/5 grid place-items-center" title="Delete"><Ico d={<><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></>} /></button>
-            </div>
-          )) : <div className="text-xs text-dim px-2.5 py-3">Nothing yet. Press Start.</div>}
-        </div>
-      </div>
-      <style>{`
-        @keyframes arena-float { 0%,100% { transform: translateY(0) rotate(-2deg); opacity: .35 } 50% { transform: translateY(-18px) rotate(2deg); opacity: .9 } }
-        @keyframes arena-breathe { 0%,100% { transform: translate(-50%, 0) scale(1); opacity: .6 } 50% { transform: translate(-50%, 8px) scale(1.12); opacity: 1 } }
-        @keyframes arena-bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
-        @keyframes arena-pulse { 0% { box-shadow: 0 0 0 0 rgb(var(--c-accent) / .55) } 70% { box-shadow: 0 0 0 14px rgb(var(--c-accent) / 0) } 100% { box-shadow: 0 0 0 0 rgb(var(--c-accent) / 0) } }
-      `}</style>
     </div>
+  )
+}
+
+// ---------- grid card: tests passed + Continue / Show ----------
+const dotOf = c => c.status === 'solved' ? 'bg-success' : c.status === 'given-up' ? 'bg-error' : 'bg-warning'
+function Card({ c, onOpen, onDelete }) {
+  const open = c.status === 'open'
+  return (
+    <Tile dot={dotOf(c)} title={c.title} sub={langOf(c.language)[1]} study={c.studyTitle} onDelete={onDelete}
+      badge={<span className={`badge py-0 ${c.status === 'solved' ? 'badge-green' : c.status === 'given-up' ? 'badge-red' : 'badge-yellow'}`}>{c.status === 'solved' ? 'Solved' : c.status === 'given-up' ? 'Given up' : 'Open'}</span>}
+      action={<button disabled={!c.statement} onClick={onOpen} className={`${open ? 'btn btn-primary' : 'btn-tint btn-blue'} inline-flex items-center justify-center gap-2 py-2.5 text-sm w-full`}>
+        {open ? <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Continue</> : <><Ico d={<><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>} />Show</>}
+      </button>}>
+      <Stats items={[[`${c.passed ?? '–'}/${c.total}`, 'tests'], [c.difficulty, 'level'], [fmt(c.elapsed || 0), 'time']]} />
+      <div className="h-1.5 rounded-full bg-panel-2 overflow-hidden"><div className={`h-full rounded-full ${dotOf(c)}`} style={{ width: `${c.total ? (c.passed || 0) / c.total * 100 : 0}%` }} /></div>
+      <div className="flex items-center text-xs text-dim"><span>{new Date(c.at).toLocaleDateString()}</span><span className="ml-auto">target {c.limitMin || 30} min</span></div>
+    </Tile>
   )
 }
 
@@ -122,7 +118,7 @@ function Coach({ study, ch, code, results, onChat }) {
 }
 
 // ---------- arena ----------
-function Arena({ study, ch, setCh, onExit }) {
+function Arena({ study, ch, setCh, onBack }) {
   const [code, setCode] = useState(ch.code || ch.starter); const [res, setRes] = useState(null); const [running, setRunning] = useState(false)
   const [review, setReview] = useState(''); const [reviewing, setReviewing] = useState(false); const [elapsed, setElapsed] = useState(ch.elapsed || 0); const [showCoach, setShowCoach] = useState(true)
   const base = `/api/studies/${study.id}/challenge/${ch.id}`
@@ -131,6 +127,8 @@ function Arena({ study, ch, setCh, onExit }) {
   useEffect(() => { if (ch.status !== 'open') return; const t = setInterval(() => { if (!document.hidden) setElapsed(e => e + 1) }, 1000); return () => clearInterval(t) }, [ch.status])
   useEffect(() => { if (elapsed && elapsed % 10 === 0) api.post(base, { elapsed }) }, [elapsed]) // eslint-disable-line
   useEffect(() => { const t = setTimeout(() => code !== ch.code && api.post(base, { code }), 800); return () => clearTimeout(t) }, [code]) // eslint-disable-line
+  const ref = useRef(); ref.current = { elapsed, code, ch }
+  useEffect(() => () => { const { elapsed, code, ch } = ref.current; if (ch.status === 'open') { api.post(base, { elapsed, code }); setCh({ ...ch, elapsed, code }) } }, []) // eslint-disable-line -- keep timer + code when switching away
   const run = async () => {
     setRunning(true); const r = await api.post('/api/run', { language: ch.language, code, tests: ch.tests }); setRunning(false); if (r.error) return alert(r.error)
     setRes(r); const solved = r.passed === r.results.length
@@ -142,7 +140,7 @@ function Arena({ study, ch, setCh, onExit }) {
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
       <div className="island px-3 py-2 flex items-center gap-3 flex-shrink-0">
-        <button onClick={onExit} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center" title="Back"><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>
+        <BackBtn onClick={onBack} title="Back to challenges" />
         <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{ch.title}</div><div className="text-[11px] text-dim"><span className="capitalize">{ch.difficulty}</span> · {langOf(ch.language)[1]} · {ch.tests.length} tests</div></div>
         {res && <span className={`badge ${res.passed === res.results.length ? 'badge-green' : 'badge-red'}`}>{res.passed} / {res.results.length}</span>}
         <Timer elapsed={elapsed} limitMin={ch.limitMin || 30} status={ch.status} />
@@ -177,14 +175,32 @@ function Arena({ study, ch, setCh, onExit }) {
   )
 }
 
-export default function CodeArena({ study, setStudy }) {
-  const [active, setActive] = useState(null); const [busy, setBusy] = useState(false)
-  const setCh = c => { setActive(c); setStudy(s => ({ ...s, challenges: s.challenges.map(x => x.id === c.id ? c : x) })) }
-  const start = async opts => {
-    setBusy(true); const c = await api.post(`/api/studies/${study.id}/challenge`, opts); setBusy(false)
-    if (c.error) return alert(c.error); setStudy(s => ({ ...s, challenges: [...s.challenges, c] })); setActive(c)
+export default function CodeArena({ studies }) {
+  const { list, update: setCh, add, remove } = useSessions('challenges', studies)
+  const [sel, setSel] = useState(null) // null = cards, 'new' = hero, id = arena
+  const [busy, setBusy] = useState(false)
+  const active = list?.find(c => c.id === sel && c.statement)
+  const start = async ({ studyId, ...opts }) => {
+    setBusy(true); const c = await api.post(`/api/studies/${studyId}/challenge`, opts); setBusy(false)
+    if (c.error) return alert(c.error); add(c, studyId); setSel(c.id)
   }
-  const del = async c => { if (!await ask({ title: `Delete «${c.title}»?`, body: 'The challenge, your code, the coach chat and the timer are removed.', ok: 'Delete' })) return; await api.del(`/api/studies/${study.id}/challenge/${c.id}`); setStudy(s => ({ ...s, challenges: s.challenges.filter(x => x.id !== c.id) })) }
-  if (active) return <Arena study={study} ch={active} setCh={setCh} onExit={async () => { setActive(null); setStudy(await api.get(`/api/studies/${study.id}`)) }} />
-  return <Lobby study={study} busy={busy} onStart={start} onOpen={setActive} onDelete={del} />
+  const del = async c => {
+    if (!await ask({ title: `Delete «${c.title}»?`, body: 'The challenge, your code, the coach chat and the timer are removed.', ok: 'Delete' })) return
+    await api.del(`/api/studies/${c.studyId}/challenge/${c.id}`); remove(c.id); if (sel === c.id) setSel(null)
+  }
+  const css = (
+      <style>{`
+        @keyframes arena-float { 0%,100% { transform: translateY(0) rotate(-2deg); opacity: .35 } 50% { transform: translateY(-18px) rotate(2deg); opacity: .9 } }
+        @keyframes arena-breathe { 0%,100% { transform: translate(-50%, 0) scale(1); opacity: .6 } 50% { transform: translate(-50%, 8px) scale(1.12); opacity: 1 } }
+        @keyframes arena-bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+        @keyframes arena-pulse { 0% { box-shadow: 0 0 0 0 rgb(var(--c-accent) / .55) } 70% { box-shadow: 0 0 0 14px rgb(var(--c-accent) / 0) } 100% { box-shadow: 0 0 0 0 rgb(var(--c-accent) / 0) } }
+      `}</style>
+  )
+  if (!list) return <div className="h-full grid place-items-center text-xs text-dim">Loading…</div>
+  if (active) return <>{css}<Arena key={active.id} study={{ id: active.studyId }} ch={active} setCh={setCh} onBack={() => setSel(null)} /></>
+  if (!list.length || sel === 'new') return <>{css}<Centered>
+    {list.length > 0 && <button onClick={() => setSel(null)} className="btn-ghost text-xs inline-flex items-center gap-1 mb-2"><Ico d={<path d="m15 18-6-6 6-6"/>} />Back to challenges</button>}
+    <Hero busy={busy} onStart={start} studies={studies} />
+  </Centered></>
+  return <>{css}<Grid onNew={() => setSel('new')} newLabel="New challenge">{list.map(c => <Card key={c.id} c={c} onOpen={() => setSel(c.id)} onDelete={() => del(c)} />)}</Grid></>
 }

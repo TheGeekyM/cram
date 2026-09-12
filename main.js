@@ -27,9 +27,10 @@ app.whenReady().then(() => {
     } catch (e) { return { ok: false, message: e.message }; }
   };
   server.showInFolder = p => shell.showItemInFolder(p);
-  server.pickPdf = async () => (await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] })).filePaths[0];
+  let win; // the dialog needs a parent window: a parentless GTK chooser can come back empty on this setup
+  server.pickPdf = async () => { const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] }); console.log('[pick-pdf]', JSON.stringify(r)); return r.canceled ? null : r.filePaths[0]; };
   const srv = server.listen(0, '127.0.0.1', () => {
-    const win = new BrowserWindow({
+    win = new BrowserWindow({
       width: 1200, height: 800, minWidth: 800, minHeight: 500,
       backgroundColor: '#0f1115', autoHideMenuBar: true, title: 'Cram', icon: path.join(__dirname, 'build/icon.png'),
     });
