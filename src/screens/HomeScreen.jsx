@@ -70,7 +70,7 @@ export default function HomeScreen({ studies, onOpen, onCreated, onDeleted }) {
   const [q, setQ] = useState(''); const [searching, setSearching] = useState(false); const [mode, setMode] = useState(null)
   const ref = useRef(); useEffect(() => { if (searching) ref.current?.focus() }, [searching])
   const list = useMemo(() => { const k = q.trim().toLowerCase(); return k ? studies.filter(s => (s.title + ' ' + (s.subject || '')).toLowerCase().includes(k)) : studies }, [studies, q])
-  const askDelete = async s => { if (!await ask({ title: `Delete «${s.title}»?`, body: 'Chat, quizzes, challenges, notes and the PDF copy are removed. This can\'t be undone.', ok: 'Delete study' })) return; await api.del(`/api/studies/${s.id}`); onDeleted() }
+  const askDelete = async s => { if (!await ask({ title: `Delete «${s.title}»?`, body: 'Chat, quizzes, challenges, notes and the PDF copy are removed. This can\'t be undone.', ok: 'Delete study' })) return; await api.del(`/api/studies/${s.id}`); onDeleted(s.id) }
   return (
     <div className="h-full flex flex-col">
       <NavBar />
