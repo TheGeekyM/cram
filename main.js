@@ -1,0 +1,24 @@
+const { app, BrowserWindow, dialog, shell, Menu } = require('electron');
+process.env.CRAM_DATA = app.getPath('userData');
+const server = require('./server');
+
+app.whenReady().then(() => {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'editMenu' }, { role: 'viewMenu' }]));
+  const ctx = Menu.buildFromTemplate([{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' }]);
+  server.pickPdf = async () => (await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] })).filePaths[0];
+  const srv = server.listen(0, '127.0.0.1', () => {
+    const win = new BrowserWindow({
+      width: 1200, height: 800, minWidth: 800, minHeight: 500,
+      backgroundColor: '#0f1115', autoHideMenuBar: true, title: 'Cram', icon: require('path').join(__dirname, 'build/icon.png'),
+    });
+    win.loadURL(`http://127.0.0.1:${srv.address().port}`);
+    win.webContents.on('context-menu', () => ctx.popup());
+    // ponytail: match physical key so Ctrl+V works on Arabic/any layout
+    const keys = { KeyV: 'paste', KeyC: 'copy', KeyX: 'cut', KeyA: 'selectAll' };
+    win.webContents.on('before-input-event', (e, input) => {
+      if (input.type === 'keyDown' && (input.control || input.meta) && keys[input.code] && !input.shift) { e.preventDefault(); win.webContents[keys[input.code]](); }
+    });
+    win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  });
+});
+app.on('window-all-closed', () => app.quit());

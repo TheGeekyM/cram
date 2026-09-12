@@ -1,0 +1,50 @@
+{
+  "name": "cram",
+  "version": "0.1.0",
+  "description": "Cram: a NotebookLM-style study desk. Attach a PDF or name a subject, then ask, quiz, get interviewed and solve coding challenges, powered by Claude.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --no-sandbox",
+    "web": "node server.js",
+    "dist": "electron-builder --linux AppImage deb"
+  },
+  "keywords": [],
+  "author": {
+    "name": "Mohamed Emad",
+    "email": "thegeekym@gmail.com",
+    "url": "https://github.com/TheGeekyM"
+  },
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "express": "^5.2.1",
+    "marked": "^18.0.12"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "productName": "Cram",
+  "build": {
+    "appId": "com.thegeekym.cram",
+    "productName": "Cram",
+    "files": [
+      "main.js",
+      "server.js",
+      "public/**",
+      "build/icon.png"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Education"
+    }
+  }
+}
