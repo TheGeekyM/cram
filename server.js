@@ -55,10 +55,10 @@ function context(s) {
       { type: 'text', text: 'This is the study material.' }] },
     { role: 'assistant', content: 'Got it. I have read the material and am ready.' }] };
 }
-const req = (s, messages, extra = {}) => ({
-  model: settings().model || 'claude-opus-5', max_tokens: 16000, fallbacks: 'default',
-  ...context(s), ...extra, messages: [...context(s).prefix, ...messages],
-});
+const req = (s, messages, extra = {}) => {
+  const { system, prefix } = context(s);
+  return { model: settings().model || 'claude-opus-5', max_tokens: 16000, fallbacks: 'default', system, ...extra, messages: [...prefix, ...messages] };
+};
 // stream text deltas straight to the HTTP response; returns full text
 async function streamText(res, s, messages, extra) {
   res.set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
