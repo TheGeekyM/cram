@@ -1,5 +1,7 @@
 const { app, BrowserWindow, dialog, shell, Menu, safeStorage } = require('electron');
 process.env.CRAM_DATA = app.getPath('userData');
+const fs = require('fs');
+const path = require('path');
 const server = require('./server');
 
 app.whenReady().then(() => {
@@ -7,11 +9,29 @@ app.whenReady().then(() => {
   server.openExternal = url => shell.openExternal(url);
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'editMenu' }, { role: 'viewMenu' }]));
   const ctx = Menu.buildFromTemplate([{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' }]);
+  // Note export: same as aidle's notes:export. PDF is typeset by Chromium off-screen.
+  const KINDS = { pdf: { title: 'Export as PDF', ext: 'pdf', filter: { name: 'PDF document', extensions: ['pdf'] } }, md: { title: 'Export as Markdown', ext: 'md', filter: { name: 'Markdown', extensions: ['md'] } } };
+  server.exportNote = async ({ body, format, defaultName } = {}) => {
+    if (!body) return { ok: false, message: 'Nothing to export.' };
+    const kind = KINDS[format] || KINDS.md;
+    try {
+      const { canceled, filePath } = await dialog.showSaveDialog({ title: kind.title, defaultPath: `${(defaultName || 'note').replace(/[/\\?%*:|"<>]/g, '-')}.${kind.ext}`, filters: [kind.filter] });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      if (format !== 'pdf') { fs.writeFileSync(filePath, body, 'utf8'); return { ok: true, path: filePath }; }
+      const tmp = path.join(app.getPath('temp'), `cram-export-${Date.now()}.html`);
+      fs.writeFileSync(tmp, body, 'utf8');
+      const w = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true } });
+      try { await w.loadFile(tmp); fs.writeFileSync(filePath, await w.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { marginType: 'none' } })); }
+      finally { w.destroy(); fs.rmSync(tmp, { force: true }); }
+      return { ok: true, path: filePath };
+    } catch (e) { return { ok: false, message: e.message }; }
+  };
+  server.showInFolder = p => shell.showItemInFolder(p);
   server.pickPdf = async () => (await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] })).filePaths[0];
   const srv = server.listen(0, '127.0.0.1', () => {
     const win = new BrowserWindow({
       width: 1200, height: 800, minWidth: 800, minHeight: 500,
-      backgroundColor: '#0f1115', autoHideMenuBar: true, title: 'Cram', icon: require('path').join(__dirname, 'build/icon.png'),
+      backgroundColor: '#0f1115', autoHideMenuBar: true, title: 'Cram', icon: path.join(__dirname, 'build/icon.png'),
     });
     win.loadURL(`http://127.0.0.1:${srv.address().port}`);
     win.webContents.on('context-menu', () => ctx.popup());

@@ -4,9 +4,10 @@
   "description": "Cram: a NotebookLM-style study desk. Attach a PDF or name a subject, then ask, quiz, get interviewed and solve coding challenges, powered by Claude.",
   "main": "main.js",
   "scripts": {
-    "start": "electron . --no-sandbox",
-    "web": "node server.js",
-    "dist": "electron-builder --linux AppImage deb"
+    "build": "vite build",
+    "start": "vite build && electron . --no-sandbox",
+    "web": "vite build && node server.js",
+    "dist": "vite build && electron-builder --linux AppImage deb"
   },
   "keywords": [],
   "author": {
@@ -18,12 +19,30 @@
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
+    "@tiptap/core": "^3.31.3",
+    "@tiptap/extension-code-block-lowlight": "^3.31.3",
+    "@tiptap/extension-list": "^3.31.3",
+    "@tiptap/extension-table": "^3.31.3",
+    "@tiptap/extension-text-style": "^3.31.3",
+    "@tiptap/extensions": "^3.31.3",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
     "express": "^5.2.1",
-    "marked": "^18.0.12"
+    "highlight.js": "^11.12.0",
+    "lowlight": "^3.3.0",
+    "marked": "^18.0.12",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "autoprefixer": "^10.6.0",
     "electron": "^44.3.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "vite": "^8.3.0"
   },
   "productName": "Cram",
   "build": {
@@ -32,7 +51,8 @@
     "files": [
       "main.js",
       "server.js",
-      "public/**",
+      "auth.js",
+      "dist/**",
       "build/icon.png"
     ],
     "directories": {

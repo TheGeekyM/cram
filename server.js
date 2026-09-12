@@ -8,8 +8,7 @@ const auth = require('./auth');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/vendor', express.static(path.join(__dirname, 'node_modules/marked/lib')));
+app.use(express.static(path.join(__dirname, 'dist')));
 
 // ponytail: CRAM_DATA set by main.js to Electron userData; web mode keeps data next to the code
 const DATA = process.env.CRAM_DATA || path.join(__dirname, 'data');
@@ -97,6 +96,37 @@ app.post('/api/studies', (req, res) => {
 app.get('/api/studies/:id', (req, res) => res.json(study(req.params.id)));
 app.delete('/api/studies/:id', (req, res) => { fs.rmSync(path.join(STUDIES, req.params.id), { recursive: true }); res.json({ ok: true }); });
 const touch = s => { s.updatedAt = Date.now(); save(s); };
+
+// ---------- notes (same semantics as aidle's notes:* IPC handlers) ----------
+const tree = import('./src/core/notesTree.mjs'); // ESM shared with the renderer; ponytail: one dynamic import, awaited per call
+const notesFile = id => path.join(STUDIES, id, 'notes.json');
+const loadNotes = id => { try { return JSON.parse(fs.readFileSync(notesFile(id), 'utf8')); } catch { return []; } };
+const saveNotes = (id, notes) => fs.writeFileSync(notesFile(id), JSON.stringify(notes));
+app.post('/api/studies/:id/notes/list', async (req, res) => {
+  try { const { migrateGroups } = await tree; const { notes, changed } = migrateGroups(loadNotes(req.params.id), req.body.extraFolders || []); if (changed) saveNotes(req.params.id, notes); res.json({ ok: true, notes }); }
+  catch (e) { res.json({ ok: false, message: e.message, notes: [] }); }
+});
+app.post('/api/studies/:id/notes/save', (req, res) => {
+  try {
+    const notes = loadNotes(req.params.id), note = req.body.note, now = Date.now();
+    const i = notes.findIndex(n => n.id === note.id), merged = { ...note, updatedAt: now, createdAt: note.createdAt || now };
+    if (i >= 0) notes[i] = merged; else notes.unshift(merged);
+    saveNotes(req.params.id, notes); res.json({ ok: true, note: merged });
+  } catch (e) { res.json({ ok: false, message: e.message }); }
+});
+app.post('/api/studies/:id/notes/reorder', (req, res) => {
+  try {
+    const notes = loadNotes(req.params.id), byId = new Map(notes.map(n => [n.id, n]));
+    const ordered = (req.body.ids || []).map(id => byId.get(id)).filter(Boolean), seen = new Set(ordered.map(n => n.id));
+    saveNotes(req.params.id, [...ordered, ...notes.filter(n => !seen.has(n.id))]); res.json({ ok: true });
+  } catch (e) { res.json({ ok: false, message: e.message }); }
+});
+app.post('/api/studies/:id/notes/delete', async (req, res) => {
+  try { const { removeNote } = await tree; const notes = removeNote(loadNotes(req.params.id), req.body.id); saveNotes(req.params.id, notes); res.json({ ok: true, notes }); }
+  catch (e) { res.json({ ok: false, message: e.message }); }
+});
+app.post('/api/notes/export', async (req, res) => res.json(app.exportNote ? await app.exportNote(req.body) : { ok: false, message: 'Export needs the desktop app.' }));
+app.post('/api/show-in-folder', (req, res) => { app.showInFolder?.(req.body.path); res.json({ ok: true }); });
 
 // ---------- ask ----------
 app.post('/api/studies/:id/chat', async (req, res) => {

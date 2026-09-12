@@ -1,0 +1,821 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Theme tokens. Every color is an "R G B" triple so Tailwind's /opacity works
+   (e.g. bg-white/5). Dark is the default; [data-theme="light"] overrides.
+   ───────────────────────────────────────────────────────────────────────────── */
+:root, :root[data-theme="dark"] {
+  --c-app:        18 19 22;      /* #121316 — canvas: the darker gaps between islands */
+  --c-panel:      30 31 34;      /* #1e1f22 — island surface */
+  --c-panel-2:    43 45 49;      /* #2b2d31 — elevated tile */
+  --c-border:     48 50 55;      /* #303237 — soft island edge */
+  --c-accent:     238 108 85;    /* #ee6c55 — the logo orange */
+  --c-accent-dim: 214 88 66;     /* #d65842 — hover/press */
+  --c-accent-2:   170 110 235;   /* #aa6eeb — purple, the hero-glow second color */
+  --c-dim:        130 138 150;   /* #828a96 — muted secondary text */
+  --c-success:    73 197 130;
+  --c-warning:    233 165 65;
+  --c-error:      240 110 110;
+
+  --c-white: 255 255 255;        /* text-white / bg-white overlays */
+  --c-black: 0 0 0;              /* bg-black overlays */
+  --c-gray-100: 223 225 229;     /* #dfe1e5 — primary text */
+  --c-gray-200: 198 202 209;
+  --c-gray-300: 168 173 181;
+  --c-gray-400: 130 138 150;
+  --c-gray-500: 108 114 124;
+  --c-gray-600: 86 91 100;
+  --c-gray-700: 60 64 71;
+  --c-gray-800: 44 46 51;
+  --c-gray-900: 32 34 38;
+  --c-gray-950: 23 24 27;
+
+  --seam: rgb(255 255 255 / 0.05);
+  --scrollbar-thumb: 42 44 50;
+  --scrollbar-track: 15 16 19;
+}
+
+:root[data-theme="light"] {
+  --c-app:        237 235 250;   /* #edebfa — lavender canvas; the colourful wash lives on .app-canvas */
+  --c-panel:      255 255 255;
+  --c-panel-2:    243 242 252;   /* #f3f2fc — elevated tile, faintly violet so it reads warm-white */
+  --c-border:     216 212 238;   /* #d8d4ee — violet-tinted edge, still visible on white */
+  --c-accent:     194 69 31;     /* #c2451f — logo orange, deepened: #ee6c55 only reaches 2.4:1 on the pale canvas */
+  --c-accent-dim: 165 57 26;     /* #a5391a */
+  --c-accent-2:   109 76 232;    /* #6d4ce8 — violet, the second brand colour and the canvas's lead hue */
+  --c-dim:        92 96 122;     /* #5c607a — readable secondary text, cooled toward the violet canvas */
+  --c-success:    21 128 61;     /* darker so green text/badges pass contrast on white */
+  --c-warning:    180 120 6;
+  --c-error:      200 32 32;
+
+  --c-white: 17 24 39;           /* flip: "white" text/overlays become ink on paper */
+  --c-black: 255 255 255;
+  --c-gray-100: 20 22 43;        /* strong text, a touch of violet in the ink */
+  --c-gray-200: 33 38 63;
+  --c-gray-300: 57 62 90;
+  --c-gray-400: 92 98 127;
+  --c-gray-500: 122 127 155;
+  --c-gray-600: 162 165 193;
+  --c-gray-700: 203 200 230;
+  --c-gray-800: 226 223 245;
+  --c-gray-900: 239 237 251;
+  --c-gray-950: 248 247 254;
+
+  --seam: rgb(109 76 232 / 0.07);
+  --scrollbar-thumb: 199 194 230;
+  --scrollbar-track: 238 236 250;
+}
+
+/* Midnight — near-black chrome + blue accent, sampled from the JetBrains-style IDE shot.
+   Only the tokens that differ from dark: everything else inherits the bare :root block. */
+:root[data-theme="midnight"] {
+  --c-app:        9 9 9;         /* #090909 — canvas/chrome: near-black */
+  --c-panel:      24 25 27;      /* #18191b — island surface, the only thing separating it from the canvas */
+  --c-panel-2:    54 55 57;      /* #363739 — elevated tile / selected row */
+  --c-border:     42 43 46;      /* #2a2b2e — the shot draws no borders; keep them barely there */
+  --c-accent:     8 112 228;     /* #0870e4 — the Send-button blue */
+  --c-accent-dim: 6 92 190;      /* #065cbe — hover/press */
+  --c-accent-2:   138 108 240;   /* #8a6cf0 — violet, only load-bearing in .hero-glow */
+  --c-dim:        140 141 144;   /* #8c8d90 — muted secondary text */
+  --c-error:      224 108 112;
+
+  --c-gray-100: 224 225 228;     /* #e0e1e4 — primary text */
+
+  --seam: rgb(255 255 255 / 0.04);
+  --scrollbar-thumb: 54 55 57;
+  --scrollbar-track: 9 9 9;
+}
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--scrollbar-thumb)) rgb(var(--scrollbar-track));
+  }
+  *::-webkit-scrollbar { width: 5px; height: 5px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: rgb(var(--scrollbar-thumb)); border-radius: 3px; }
+  *::-webkit-scrollbar-thumb:hover { background: rgb(var(--c-accent)); }
+
+  html { color-scheme: dark; }
+  html[data-theme="light"] { color-scheme: light; }
+
+  body {
+    @apply bg-app text-gray-100 font-sans select-text;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.25s ease, color 0.25s ease;
+  }
+
+  .titlebar-drag { -webkit-app-region: drag; user-select: none; }
+  button, input, textarea, select { -webkit-app-region: no-drag; }
+  /* A native dropdown paints its list from the control's own colours, and most selects here
+     are bg-transparent — so on a dark UI the open list came out white. Pin the list to the
+     theme tokens; they flip with the theme, so light mode stays correct too. */
+  select option, select optgroup {
+    background: rgb(var(--c-panel));
+    color: rgb(var(--c-gray-100));
+  }
+
+  ::selection { background: rgb(var(--c-accent) / 0.28); }
+}
+
+@layer components {
+  .panel {
+    @apply bg-panel border border-border rounded-xl;
+    box-shadow: 0 1px 0 0 var(--seam), 0 14px 34px -20px rgb(0 0 0 / 0.65);
+  }
+  /* Islands: a rounded surface that floats on the darker canvas. */
+  .island {
+    @apply bg-panel border border-border rounded-xl;
+    box-shadow: 0 1px 0 0 var(--seam), 0 18px 40px -24px rgb(0 0 0 / 0.7);
+  }
+  /* Light mode: the heavy near-black drop shadow reads as dirt on paper. Swap both surfaces for a
+     soft, tight elevation, tinted violet so white cards lift off the lavender canvas. */
+  :root[data-theme="light"] .panel,
+  :root[data-theme="light"] .island {
+    box-shadow: 0 1px 2px rgb(60 40 130 / 0.07), 0 10px 28px -14px rgb(60 40 130 / 0.28);
+  }
+  /* A whisper of the canvas hues across each island, so white-on-white cards inside it still
+     separate and the surface reads as tinted paper rather than a blank sheet. */
+  :root[data-theme="light"] .island,
+  :root[data-theme="light"] .panel {
+    background-image: linear-gradient(160deg, rgb(109 76 232 / 0.05), rgb(236 72 153 / 0.035) 55%, rgb(56 189 248 / 0.04));
+  }
+
+  /* Light mode only: a hue tile — a surface filled with one of the app's gradient pairs
+     (see src/hues.js), used for the pipeline strip and for section-card headers. It is the one
+     place the app carries big blocks of colour. Status still reads off the dots, which keep
+     their own hue because they are painted with background, not text colour. */
+  :root[data-theme="light"] .hue-tile {
+    background-image: linear-gradient(135deg, var(--pa), var(--pb));
+    border-color: rgb(255 255 255 / 0.28);
+  }
+  :root[data-theme="light"] .hue-tile,
+  :root[data-theme="light"] .hue-tile * { color: #fff; }
+  :root[data-theme="light"] .hue-tile p,
+  :root[data-theme="light"] .hue-tile .text-\[10px\],
+  :root[data-theme="light"] .hue-tile .text-\[11px\] { color: rgb(255 255 255 / 0.82); }
+  :root[data-theme="light"] .hue-tile:hover { filter: brightness(1.07); }
+  /* Only a free-standing tile floats; a card's header strip belongs to the card. */
+  :root[data-theme="light"] .hue-tile.hue-raised {
+    box-shadow: 0 10px 22px -12px var(--pb);
+  }
+  :root[data-theme="light"] .hue-tile.hue-raised:hover { border-color: rgb(255 255 255 / 0.5); }
+
+  /* The shell behind the islands. Dark themes want a flat canvas; light gets the wash —
+     violet / pink / cyan / amber corners, so the gaps between cards carry the colour. */
+  :root[data-theme="light"] .app-canvas {
+    background:
+      radial-gradient(75% 55% at 0% 0%,    rgb(124 92 235 / 0.26), transparent 62%),
+      radial-gradient(55% 45% at 100% 0%,  rgb(236 72 153 / 0.18), transparent 60%),
+      radial-gradient(60% 50% at 82% 100%, rgb(56 189 248 / 0.22), transparent 62%),
+      radial-gradient(50% 45% at 18% 100%, rgb(245 158 11 / 0.16), transparent 60%),
+      rgb(var(--c-app));
+  }
+  /* A long generated document (the team report) read at length, not a chat bubble: give the
+     headings air and a rule, so sections separate without the writer having to draw them. */
+  .report-body > div > p:first-child { @apply text-lg text-white mb-1; }
+  .report-body p.text-sm.font-bold { @apply mt-6 pt-3 border-t border-border/60; }
+  .report-body p.text-sm.font-semibold { @apply mt-4 text-accent; }
+  .report-body ul, .report-body ol { @apply my-1; }
+  .report-body table { @apply my-2; }
+
+  /* One confined ambient glow for a hero surface (top-left purple → dark). */
+  .hero-glow {
+    background:
+      radial-gradient(115% 90% at 12% -10%, rgb(var(--c-accent-2) / 0.20), transparent 55%),
+      radial-gradient(90% 80% at 62% -20%, rgb(var(--c-accent) / 0.10), transparent 60%),
+      rgb(var(--c-panel));
+  }
+  /* Light mode: the dark-tuned glow is invisible on a white panel. Same idea, stronger and in
+     three hues, so a hero surface (setup page, pipeline strip) is not a blank sheet. */
+  :root[data-theme="light"] .hero-glow {
+    background:
+      radial-gradient(110% 85% at 6% -10%,  rgb(var(--c-accent-2) / 0.18), transparent 58%),
+      radial-gradient(90% 75% at 94% -15%,  rgb(236 72 153 / 0.14), transparent 60%),
+      radial-gradient(85% 70% at 55% 118%,  rgb(56 189 248 / 0.16), transparent 62%),
+      rgb(var(--c-panel));
+  }
+  .panel-header {
+    @apply text-xs font-semibold tracking-[0.14em] uppercase text-dim px-4 py-2.5 border-b border-border;
+  }
+  .btn {
+    @apply px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer;
+  }
+  .btn-primary {
+    @apply btn bg-accent hover:bg-accent-dim;
+    color: rgb(var(--c-app));   /* max-contrast on the mid-tone accent in both themes */
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  }
+  .btn-primary:hover { box-shadow: 0 0 0 1px rgb(var(--c-accent) / 0.5), 0 6px 18px -6px rgb(var(--c-accent) / 0.5); }
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-white/[0.06] text-gray-300 border border-border;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border;
+  }
+  /* Tinted from the semantic colors so badges read in both themes. */
+  .badge-blue   { @apply badge; background: rgb(59 130 246 / 0.14);  color: rgb(96 165 250); border-color: rgb(59 130 246 / 0.3); }
+  .badge-green  { @apply badge; background: rgb(var(--c-success) / 0.14); color: rgb(var(--c-success)); border-color: rgb(var(--c-success) / 0.3); }
+  .badge-purple { @apply badge; background: rgb(168 85 247 / 0.14);  color: rgb(192 132 252); border-color: rgb(168 85 247 / 0.3); }
+  .badge-yellow { @apply badge; background: rgb(var(--c-warning) / 0.14); color: rgb(var(--c-warning)); border-color: rgb(var(--c-warning) / 0.3); }
+  .badge-red    { @apply badge; background: rgb(var(--c-error) / 0.14); color: rgb(var(--c-error)); border-color: rgb(var(--c-error) / 0.3); }
+  .input {
+    @apply w-full bg-app border border-border rounded-lg px-3 py-2 text-sm text-gray-100
+           placeholder-dim focus:outline-none transition-colors;
+  }
+  .input:focus { border-color: rgb(var(--c-accent) / 0.6); box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.12); }
+  .mono { @apply font-mono text-sm; }
+
+  /* Tinted action buttons — one colour per action, so a row of them reads at a glance
+     (the Forge's run panel). Same tint recipe as the badges, so they work on white too. */
+  .btn-tint {
+    @apply text-xs font-medium px-2.5 py-1.5 rounded-md border inline-flex items-center gap-1.5 transition-colors;
+  }
+  .btn-tint:disabled { @apply opacity-40 cursor-not-allowed; }
+  .btn-green  { @apply btn-tint; background: rgb(var(--c-success) / 0.14); color: rgb(var(--c-success)); border-color: rgb(var(--c-success) / 0.35); }
+  .btn-amber  { @apply btn-tint; background: rgb(var(--c-warning) / 0.14); color: rgb(var(--c-warning)); border-color: rgb(var(--c-warning) / 0.35); }
+  .btn-red    { @apply btn-tint; background: rgb(var(--c-error) / 0.12);   color: rgb(var(--c-error));   border-color: rgb(var(--c-error) / 0.3); }
+  .btn-blue   { @apply btn-tint; background: rgb(59 130 246 / 0.14);  color: rgb(59 130 246); border-color: rgb(59 130 246 / 0.32); }
+  .btn-purple { @apply btn-tint; background: rgb(168 85 247 / 0.14);  color: rgb(147 51 234); border-color: rgb(168 85 247 / 0.32); }
+  /* ponytail: in midnight .btn-blue sits close to --c-accent; retint it from --c-accent-2 if the run panel reads flat. */
+  :root:not([data-theme="light"]) .btn-blue   { color: rgb(96 165 250); }
+  :root:not([data-theme="light"]) .btn-purple { color: rgb(192 132 252); }
+  .btn-green:hover:not(:disabled)  { background: rgb(var(--c-success) / 0.24); }
+  .btn-amber:hover:not(:disabled)  { background: rgb(var(--c-warning) / 0.24); }
+  .btn-red:hover:not(:disabled)    { background: rgb(var(--c-error) / 0.22); }
+  .btn-blue:hover:not(:disabled)   { background: rgb(59 130 246 / 0.24); }
+  .btn-purple:hover:not(:disabled) { background: rgb(168 85 247 / 0.24); }
+}
+
+/* Blinking cursor for streaming */
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.cursor-blink::after { content: '▋'; @apply text-accent; animation: blink 1s step-end infinite; }
+.animate-blink { animation: blink 1s step-end infinite; }
+
+@keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.2); } }
+.stage-active { animation: pulse-dot 1s ease-in-out infinite; }
+
+@keyframes scan-file-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+.scan-file-in { animation: scan-file-in 0.12s ease-out forwards; }
+
+@keyframes check-pop { 0% { transform: scale(0.5); opacity: 0; } 70% { transform: scale(1.2); } 100% { transform: scale(1); opacity: 1; } }
+.check-pop { animation: check-pop 0.25s ease-out forwards; }
+
+@keyframes radar { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.radar-sweep { animation: radar 2s linear infinite; }
+
+/* Equalizer-style loader: vertical bars springing up and down in a wave. */
+@keyframes eq-bar { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+.eq-bar { animation: eq-bar 0.9s ease-in-out infinite; transform-origin: bottom; }
+
+@keyframes progress { 0% { transform: translateX(-100%); } 50% { transform: translateX(150%); } 100% { transform: translateX(150%); } }
+
+/* ── Loader: modern conic-gradient ring + shimmering label (see components/Loader.jsx) ── */
+@keyframes loader-spin { to { transform: rotate(360deg); } }
+@keyframes loader-shimmer { to { background-position: -200% 0; } }
+
+/* Block ring: baby-blue → periwinkle comet arc */
+.loader-ring {
+  border-radius: 9999px;
+  background: conic-gradient(from 90deg, transparent 0deg, rgb(var(--c-accent-2)) 210deg, rgb(var(--c-accent)) 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  animation: loader-spin 0.8s linear infinite;
+}
+/* Inline ring: inherits text color so it reads on any button/background */
+.loader-inline {
+  border-radius: 9999px;
+  background: conic-gradient(from 90deg, transparent 0deg, currentColor 300deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  animation: loader-spin 0.7s linear infinite;
+}
+/* Label sweep signals live progress and reads as "scanning" */
+.loader-label {
+  background: linear-gradient(100deg, rgb(var(--c-gray-100)) 42%, rgb(var(--c-accent)) 50%, rgb(var(--c-gray-100)) 58%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: loader-shimmer 2.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loader-ring   { animation-duration: 2.4s; }
+  .loader-inline { animation-duration: 2s; }
+  .loader-label  { animation: none; color: rgb(var(--c-gray-100)); }
+}
+
+.hljs { background: transparent !important; }
+
+/* Light-mode syntax colors — github-dark.css is imported for the dark theme;
+   these higher-specificity rules recolor tokens for light so code stays legible. */
+:root[data-theme="light"] .hljs { color: #24292e; }
+:root[data-theme="light"] .hljs-comment,
+:root[data-theme="light"] .hljs-quote { color: #6a737d; }
+:root[data-theme="light"] .hljs-keyword,
+:root[data-theme="light"] .hljs-selector-tag,
+:root[data-theme="light"] .hljs-literal,
+:root[data-theme="light"] .hljs-type { color: #d73a49; }
+:root[data-theme="light"] .hljs-string,
+:root[data-theme="light"] .hljs-regexp,
+:root[data-theme="light"] .hljs-meta .hljs-string { color: #032f62; }
+:root[data-theme="light"] .hljs-title,
+:root[data-theme="light"] .hljs-section,
+:root[data-theme="light"] .hljs-name,
+:root[data-theme="light"] .hljs-selector-id,
+:root[data-theme="light"] .hljs-selector-class { color: #6f42c1; }
+:root[data-theme="light"] .hljs-number,
+:root[data-theme="light"] .hljs-symbol,
+:root[data-theme="light"] .hljs-bullet { color: #005cc5; }
+:root[data-theme="light"] .hljs-built_in,
+:root[data-theme="light"] .hljs-builtin-name,
+:root[data-theme="light"] .hljs-attr,
+:root[data-theme="light"] .hljs-attribute,
+:root[data-theme="light"] .hljs-variable,
+:root[data-theme="light"] .hljs-template-variable { color: #e36209; }
+:root[data-theme="light"] .hljs-tag { color: #22863a; }
+:root[data-theme="light"] .hljs-meta { color: #6a737d; }
+
+/* Rich text from ADO/Jira work items — tables, lists, formatting (Tailwind resets these) */
+.kb-rich p { margin: 0 0 0.5rem; }
+.kb-rich p:last-child { margin-bottom: 0; }
+.kb-rich strong, .kb-rich b { color: rgb(var(--c-gray-100)); font-weight: 600; }
+.kb-rich em, .kb-rich i { font-style: italic; }
+.kb-rich a { color: rgb(var(--c-accent)); text-decoration: underline; }
+.kb-rich ul { list-style: disc; padding-left: 1.25rem; margin: 0 0 0.5rem; }
+.kb-rich ol { list-style: decimal; padding-left: 1.25rem; margin: 0 0 0.5rem; }
+.kb-rich li { margin: 0.15rem 0; }
+.kb-rich h1, .kb-rich h2, .kb-rich h3, .kb-rich h4 { color: rgb(var(--c-gray-100)); font-weight: 600; margin: 0.6rem 0 0.3rem; }
+.kb-rich table { border-collapse: collapse; margin: 0.25rem 0 0.75rem; font-size: 0.8125rem; }
+.kb-rich th, .kb-rich td { border: 1px solid rgb(var(--c-border)); padding: 0.35rem 0.6rem; text-align: left; vertical-align: top; }
+.kb-rich th { background: rgb(var(--c-panel-2)); color: rgb(var(--c-gray-100)); font-weight: 600; }
+.kb-rich img { max-width: 100%; height: auto; }
+.kb-rich pre { white-space: pre-wrap; background: rgb(var(--c-panel-2)); padding: 0.5rem 0.6rem; border-radius: 0.375rem; overflow-x: auto; }
+.kb-rich code { font-family: ui-monospace, monospace; font-size: 0.8125rem; }
+
+/* The Forge's full-page run report: same markdown, but sized to be read as a document
+   rather than as a side-panel note. */
+.report-md h2 { font-size: 1.25rem; line-height: 1.75rem; margin: 0 0 0.75rem; }
+.report-md h3 { font-size: 0.95rem; margin: 1.5rem 0 0.4rem; letter-spacing: 0.01em; }
+.report-md h3:first-child { margin-top: 0; }
+.report-md p, .report-md li { font-size: 0.875rem; line-height: 1.65; }
+.report-md li { margin: 0.3rem 0; }
+.report-md ul, .report-md ol { margin-bottom: 0.9rem; }
+.report-md hr { margin: 1.25rem 0; }
+
+/* Notes editor (Notion-lite, Tiptap/ProseMirror) */
+/* Placeholder sits on the first empty paragraph, not the editor root. */
+.nt-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: rgb(var(--c-dim)); opacity: 0.6; pointer-events: none; float: left; height: 0; }
+.nt-editor h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.015em; color: rgb(var(--c-gray-100)); margin: 1.9rem 0 0.6rem; }
+.nt-editor h2 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; color: rgb(var(--c-gray-100)); margin: 1.5rem 0 0.5rem; }
+.nt-editor h3 { font-size: 1.08rem; font-weight: 600; color: rgb(var(--c-gray-100)); margin: 1.2rem 0 0.4rem; }
+/* No stacked space when a heading opens the document or follows another heading. */
+.nt-editor > :first-child { margin-top: 0; }
+.nt-editor h1 + h2, .nt-editor h2 + h3 { margin-top: 0.7rem; }
+.nt-editor p { margin: 0.55rem 0; }
+.nt-editor ul { list-style: disc; padding-left: 1.5rem; margin: 0.55rem 0; }
+.nt-editor ol { list-style: decimal; padding-left: 1.5rem; margin: 0.55rem 0; }
+.nt-editor li { margin: 0.22rem 0; }
+.nt-editor li::marker { color: rgb(var(--c-dim)); }
+.nt-editor a { color: rgb(var(--c-accent)); text-decoration: underline; }
+.nt-editor blockquote { border-left: 2px solid rgb(var(--c-accent) / 0.5); padding: 0.1rem 0 0.1rem 0.9rem; margin: 0.9rem 0; color: rgb(var(--c-gray-300)); }
+/* Code blocks: hljs paints the tokens, but its theme hardcodes a dark bg/fg — these two
+   win on specificity so the block still follows the app theme. */
+.nt-editor pre { position: relative; background: rgb(var(--c-panel-2)); color: rgb(var(--c-gray-100)); border: 1px solid rgb(var(--c-border)); padding: 0.7rem 0.9rem; border-radius: 0.5rem; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 0.8125rem; line-height: 1.6; margin: 0.6rem 0; white-space: pre-wrap; }
+/* Detected language shows as a header strip on the block, like an editor tab. */
+/* Code block. The wrapper draws the frame so the language picker can live in a header strip
+   on the block itself rather than in a document-wide toolbar.
+   The bar is its own surface — a shade off the code below it — so the block reads as an editor
+   pane with a title bar, not as one grey slab with text floating at the top of it. */
+.nt-code {
+  position: relative; margin: 1.25rem 0;
+  background: rgb(var(--c-app));
+  border: 1px solid rgb(var(--c-border));
+  border-radius: 0.75rem;
+  box-shadow: 0 10px 26px -20px rgb(0 0 0 / 0.85);
+}
+:root[data-theme="light"] .nt-code {
+  background: rgb(var(--c-panel-2));
+  box-shadow: 0 1px 2px rgb(60 40 130 / 0.06), 0 8px 20px -16px rgb(60 40 130 / 0.35);
+}
+.nt-code .nt-code-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.35rem 0.85rem 0.35rem 0.95rem;
+  background: rgb(var(--c-panel));
+  border-bottom: 1px solid rgb(var(--c-border));
+  border-radius: 0.7rem 0.7rem 0 0;
+  user-select: none;
+}
+
+/* The language chip and its menu. The list is ours, not the platform's — a native <select>
+   popped an OS menu that could not be told about the theme. */
+.nt-code .nt-code-lang-wrap { position: relative; display: inline-flex; }
+.nt-code .nt-code-lang {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.24rem 0.55rem; border-radius: 0.45rem;
+  background: transparent; border: 1px solid transparent; cursor: pointer;
+  color: rgb(var(--c-gray-300)); transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.nt-code .nt-code-lang:hover,
+.nt-code .nt-code-lang.is-open {
+  background: rgb(var(--c-accent) / 0.12); border-color: rgb(var(--c-accent) / 0.3); color: rgb(var(--c-accent));
+}
+.nt-code .nt-code-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+.nt-code .nt-code-name {
+  font-family: ui-monospace, monospace; font-size: 0.6875rem; letter-spacing: 0.02em;
+}
+.nt-code .nt-code-menu {
+  position: absolute; top: calc(100% + 5px); left: 0; z-index: 40;
+  display: flex; flex-direction: column; min-width: 10.5rem; max-height: 17rem; overflow-y: auto;
+  padding: 0.3rem; border-radius: 0.6rem;
+  background: rgb(var(--c-panel)); border: 1px solid rgb(var(--c-border));
+  box-shadow: 0 18px 40px -16px rgb(0 0 0 / 0.6);
+}
+.nt-code .nt-code-opt {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.32rem 0.5rem; border: 0; border-radius: 0.4rem; cursor: pointer;
+  background: transparent; color: rgb(var(--c-gray-300));
+  font-family: ui-monospace, monospace; font-size: 0.6875rem; text-align: left;
+}
+.nt-code .nt-code-opt span { flex: 1 1 auto; }
+.nt-code .nt-code-opt:hover { background: rgb(var(--c-gray-100) / 0.08); color: rgb(var(--c-gray-100)); }
+.nt-code .nt-code-opt.is-on { color: rgb(var(--c-accent)); }
+
+.nt-code .nt-code-right { display: flex; align-items: center; gap: 0.55rem; }
+.nt-code .nt-code-lines {
+  font-family: ui-monospace, monospace; font-size: 0.625rem; color: rgb(var(--c-dim) / 0.75);
+  opacity: 0; transition: opacity 0.15s;
+}
+.nt-code:hover .nt-code-lines { opacity: 1; }
+
+/* Copy stays quiet until the block is hovered or the button itself is focused. */
+.nt-code .nt-code-copy {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s;
+  font-size: 0.6875rem; color: rgb(var(--c-dim));
+  background: transparent; border: 0; cursor: pointer;
+  padding: 0.22rem 0.5rem; border-radius: 0.4rem;
+}
+.nt-code:hover .nt-code-copy, .nt-code .nt-code-copy:focus-visible { opacity: 1; }
+.nt-code .nt-code-copy:hover { color: rgb(var(--c-gray-100)); background: rgb(var(--c-gray-100) / 0.08); }
+
+/* The frame belongs to the wrapper — the inner pre only carries the code itself. */
+.nt-code pre {
+  margin: 0; border: 0; border-radius: 0; background: transparent;
+  padding: 1rem 1.5rem; line-height: 1.75; font-size: 0.8125rem;
+  border-radius: 0 0 0.7rem 0.7rem;
+}
+.nt-editor hr { border: none; border-top: 1px solid rgb(var(--c-border)); margin: 1.6rem 0; }
+/* To-dos: Tiptap task lists, plus .nt-todo from notes written under the old editor. */
+.nt-editor ul[data-type="taskList"] { list-style: none; padding-left: 0.2rem; }
+.nt-editor ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 0.5rem; }
+.nt-editor ul[data-type="taskList"] li > div { flex: 1 1 auto; min-width: 0; }
+.nt-editor ul[data-type="taskList"] li[data-checked="true"] > div { color: rgb(var(--c-dim)); text-decoration: line-through; }
+.nt-editor .nt-todo { display: flex; align-items: flex-start; gap: 0.5rem; margin: 0.15rem 0; }
+.nt-editor input[type="checkbox"] { margin-top: 0.28rem; accent-color: rgb(var(--c-accent)); cursor: pointer; flex-shrink: 0; }
+/* ProseMirror focus ring is handled by the toolbar/island chrome, not the content box. */
+
+/* Tables. Borders collapse onto a shared grid, the header row is tinted, and columns carry
+   explicit widths so the drag handles have something to move. */
+.nt-editor table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0.9rem 0;
+  border: 1px solid rgb(var(--c-border));
+}
+.nt-editor table td,
+.nt-editor table th {
+  border: 1px solid rgb(var(--c-border));
+  padding: 0.4rem 0.6rem;
+  vertical-align: top;
+  position: relative;
+  min-width: 3rem;
+}
+.nt-editor table th {
+  background: rgb(var(--c-panel-2));
+  font-weight: 600;
+  text-align: start;
+  color: rgb(var(--c-gray-100));
+}
+.nt-editor table p { margin: 0; }
+/* The cell(s) a table operation would act on. */
+.nt-editor table .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgb(var(--c-accent) / 0.12);
+  pointer-events: none;
+}
+/* Drag target for resizing a column — invisible until hovered. */
+.nt-editor table .column-resize-handle {
+  position: absolute;
+  right: -2px; top: 0; bottom: -2px;
+  width: 4px;
+  background: rgb(var(--c-accent));
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+.nt-editor table:hover .column-resize-handle { opacity: 0.35; }
+.nt-editor .tableWrapper { overflow-x: auto; }
+.nt-editor.resize-cursor { cursor: col-resize; }
+
+.nt-editor:focus, .nt-editor:focus-visible { outline: none; }
+
+/* ── Page view ──────────────────────────────────────────────────────────────
+   The same note HTML, read rather than written. The editor is a working surface;
+   this is the printed spec — serif body over a narrower measure, sections opening
+   like numbered clauses in a datasheet, tables built for scanning a column list.
+   Everything is drawn from the theme tokens, so it holds up on both backgrounds. */
+.nt-page {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
+  font-size: 1.02rem;
+  line-height: 1.75;
+  color: rgb(var(--c-gray-200));
+  /* No max-width of its own — the width selector in the toolbar sets the measure, the
+     same control that governs the editor. A cap here silently overrode it. */
+}
+.nt-page > :first-child { margin-top: 0; }
+.nt-page p { margin: 0.85rem 0; }
+.nt-page strong { color: rgb(var(--c-gray-100)); font-weight: 600; }
+
+/* Section opener: a mono label the width of the content, with the rule carrying the
+   eye across to the margin. The accent tick is the only ornament on the page. */
+.nt-page h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: rgb(var(--c-gray-100));
+  margin: 2.6rem 0 1.1rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid rgb(var(--c-accent));
+}
+.nt-page h2::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgb(var(--c-border));
+}
+.nt-page h3 {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: rgb(var(--c-gray-100));
+  margin: 1.6rem 0 0.5rem;
+}
+.nt-page h2 + h3 { margin-top: 0.9rem; }
+
+.nt-page ul { list-style: disc; padding-left: 1.35rem; margin: 0.8rem 0; }
+.nt-page ol { list-style: decimal; padding-left: 1.35rem; margin: 0.8rem 0; }
+.nt-page li { margin: 0.35rem 0; padding-left: 0.15rem; }
+.nt-page li::marker { color: rgb(var(--c-accent) / 0.7); font-family: ui-monospace, monospace; font-size: 0.85em; }
+.nt-page blockquote {
+  border-left: 2px solid rgb(var(--c-border));
+  padding-left: 1rem;
+  margin: 1.1rem 0;
+  color: rgb(var(--c-gray-300));
+  font-style: italic;
+}
+.nt-page hr { border: 0; border-top: 1px solid rgb(var(--c-border)); margin: 2rem 0; }
+
+/* A label that opens a paragraph is a callout — "Open question", "Risk", "Decision".
+   The tint comes from the label's own colour, so the palette lives in the content and
+   the pill follows it into either theme. Colour used mid-sentence stays plain text. */
+.nt-page p > span[style*="color"]:first-child {
+  display: inline-block;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 4px;
+  padding: 0.05em 0.5em;
+  margin-right: 0.35em;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: 0.08em;
+}
+
+/* Column lists, read down. No vertical rules — the eye follows the row, and the
+   identifier column is monospaced because that is what it is. */
+.nt-page table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.1rem 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+.nt-page table th {
+  text-align: start;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: rgb(var(--c-dim));
+  padding: 0 0.75rem 0.5rem;
+  border-bottom: 1px solid rgb(var(--c-border));
+}
+.nt-page table td {
+  padding: 0.55rem 0.75rem;
+  vertical-align: top;
+  border-bottom: 1px solid rgb(var(--c-border) / 0.5);
+  color: rgb(var(--c-gray-200));
+}
+.nt-page table tr:nth-child(even) td { background: rgb(var(--c-panel-2) / 0.4); }
+.nt-page table td:first-child {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: rgb(var(--c-gray-100));
+  white-space: nowrap;
+}
+.nt-page table p { margin: 0; }
+
+.nt-page code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82em;
+  background: rgb(var(--c-panel-2) / 0.7);
+  border: 1px solid rgb(var(--c-border) / 0.6);
+  border-radius: 4px;
+  padding: 0.08em 0.35em;
+  color: rgb(var(--c-gray-100));
+}
+.nt-page pre {
+  background: rgb(var(--c-panel-2) / 0.55);
+  border: 1px solid rgb(var(--c-border));
+  border-radius: 0.6rem;
+  padding: 1rem 1.1rem;
+  margin: 1.1rem 0;
+  overflow-x: auto;                 /* the ASCII diagrams are wide; the page must not be */
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+.nt-page pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+/* ── Cold-start splash ──────────────────────────────────────────────────────
+   Sits over the app while it mounts and removes itself. Timings here are the
+   contract with SplashScreen.jsx: it fades at 1150ms and unmounts at 1500ms. */
+.splash {
+  position: fixed; inset: 0; z-index: 9999;
+  display: grid; place-items: center;
+  background: rgb(var(--c-app));
+  animation: splash-out 0.35s ease-in 1.15s forwards;
+}
+.splash-leaving { pointer-events: none; }
+/* One confined bloom behind the mark, warm because the accent is warm. */
+.splash-glow {
+  position: absolute; width: 46rem; height: 46rem; border-radius: 50%;
+  background: radial-gradient(circle, rgb(var(--c-accent) / 0.16), transparent 62%);
+  opacity: 0; animation: splash-bloom 0.9s ease-out 0.1s forwards;
+}
+.splash-stack { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1.15rem; white-space: nowrap; }
+.splash-mark {
+  position: relative; width: 4.5rem; height: 4.5rem; border-radius: 1.25rem;
+  display: grid; place-items: center; overflow: hidden;
+  background: rgb(var(--c-accent)); color: #fff;
+  font-weight: 800; font-size: 2rem; line-height: 1;
+  box-shadow: 0 18px 50px -12px rgb(var(--c-accent) / 0.65);
+  opacity: 0; animation: splash-land 0.62s cubic-bezier(0.22, 1.2, 0.36, 1) 0.08s forwards;
+}
+/* The light crossing the mark — the "guiding light", and the one flourish here. */
+.splash-sweep {
+  position: absolute; top: 0; bottom: 0; width: 45%;
+  background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.75), transparent);
+  transform: translateX(-160%);
+  animation: splash-sweep 0.75s cubic-bezier(0.4, 0, 0.2, 1) 0.42s;
+}
+.splash-word {
+  font-size: 1.55rem; font-weight: 700; color: rgb(var(--c-gray-100));
+  letter-spacing: 0.42em; text-indent: 0.42em;
+  opacity: 0; animation: splash-word 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.34s forwards;
+}
+.splash-tag {
+  font-size: 0.75rem; color: rgb(var(--c-dim));
+  opacity: 0; animation: splash-rise 0.6s ease-out 0.6s forwards;
+}
+@keyframes splash-bloom { to { opacity: 1; } }
+@keyframes splash-land {
+  from { opacity: 0; transform: scale(0.66) translateY(14px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes splash-sweep { to { transform: translateX(260%); } }
+/* Letters draw together as they arrive, so the wordmark settles instead of just appearing. */
+@keyframes splash-word {
+  from { opacity: 0; letter-spacing: 0.78em; text-indent: 0.78em; transform: translateY(6px); }
+  to   { opacity: 1; letter-spacing: 0.42em; text-indent: 0.42em; transform: translateY(0); }
+}
+@keyframes splash-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes splash-out { to { opacity: 0; transform: scale(1.04); } }
+
+/* Killing the animations alone would leave everything at its opacity:0 start state — a blank
+   screen. Land them on their finished values instead. */
+@media (prefers-reduced-motion: reduce) {
+  .splash, .splash * { animation: none !important; }
+  .splash-glow, .splash-mark, .splash-word, .splash-tag { opacity: 1; transform: none; }
+}
+
+/* ── Planner: the water level on a meeting card ──────────────────────────────────────────
+   A meeting fills up over the last half hour before it starts. Amber while it is still ahead
+   of you, green the moment it is happening — the point being that you can tell what is about
+   to interrupt you without reading a single time. The wave is two slow, offset translations,
+   which is enough to read as liquid and cheap enough to leave running on a dozen cards. */
+/* A hole in the day. Hatched rather than filled: an empty band reads as a missing row, and a
+   solid one reads as another booking — the stripes say "nothing here" without adding weight. */
+.planner-gap {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgb(255 255 255 / 0.035) 0 6px,
+    transparent 6px 12px
+  );
+  border: 1px dashed rgb(255 255 255 / 0.07);
+}
+
+.planner-tide {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  transition: height 1s linear, background-color 0.6s ease;
+  pointer-events: none;
+}
+/* The surface. A large square with a soft border-radius, rotating just below the water line —
+   only its top sliver shows, so the edge undulates like liquid instead of sliding past as a
+   band. Two of them at different speeds, one reversed, so the crests never repeat visibly. */
+.planner-tide::before,
+.planner-tide::after {
+  content: ''; position: absolute; left: 50%; top: 0;
+  width: 300px; height: 300px; margin-left: -150px; margin-top: -289px;
+  border-radius: 42%;
+  background: inherit;
+  animation: planner-wave 9s linear infinite;
+}
+.planner-tide::after {
+  margin-top: -292px;
+  opacity: 0.5;
+  animation-duration: 14s;
+  animation-direction: reverse;
+}
+@keyframes planner-wave { to { transform: rotate(360deg); } }
+
+/* The nudge: work that should not still be open tonight. A slow breath on the border rather
+   than a flash — it has to survive being on screen all day without becoming wallpaper. */
+.planner-nudge { animation: planner-nudge 2.6s ease-in-out infinite; }
+@keyframes planner-nudge {
+  0%, 100% { border-color: rgb(248 113 113 / 0.30); box-shadow: 0 0 0 0 rgb(248 113 113 / 0); }
+  50%      { border-color: rgb(248 113 113 / 0.75); box-shadow: 0 0 12px -2px rgb(248 113 113 / 0.45); }
+}
+/* The "finish this" line only leans in when you are looking at it. */
+.planner-urge { animation: planner-urge 2.6s ease-in-out infinite; }
+@keyframes planner-urge { 0%, 100% { opacity: 0.62; } 50% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .planner-tide::before, .planner-tide::after { animation: none; }
+  .planner-nudge, .planner-urge { animation: none; }
+  .planner-nudge { border-color: rgb(248 113 113 / 0.6); }
+}
+
+/* Tab panes: screens size themselves with h-screen/min-h-screen (the old full-window
+   layout). Inside a tab pane the pane is their viewport, so remap those to the pane. */
+.tab-pane { overflow: auto; }
+.tab-pane > .h-screen { height: 100% !important; }
+.tab-pane > .min-h-screen { min-height: 100% !important; }
+
+/* A diagram reads best when one thread of it is lit and the rest steps back. The dashes travel
+   from source to target, so the motion says which way the arrow points — it only ever runs on
+   the arrows you are pointing at, never board-wide, or it is decoration. */
+@keyframes cm-flow { to { stroke-dashoffset: -48; } }
+.cm-flow { animation: cm-flow 1.1s linear infinite; }
+.cm-fade { transition: opacity 140ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .cm-flow { animation: none; }
+}
+
+/* Notifications. The motion is all about arrival and imminence — nothing loops for decoration.
+   A meeting inside the last five minutes is the only thing here allowed to keep moving. */
+@keyframes nb-ring {
+  0%, 60%, 100% { transform: rotate(0); }
+  10%, 30%, 50% { transform: rotate(-11deg); }
+  20%, 40%      { transform: rotate(11deg); }
+}
+@keyframes nb-pop   { from { transform: scale(.4); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+@keyframes nb-panel { from { transform: translateY(-6px) scale(.98); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes nb-row   { from { transform: translateY(4px); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes nb-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+@keyframes nb-halo  { 0% { transform: scale(1); opacity: .55 } 100% { transform: scale(2.1); opacity: 0 } }
+
+.nb-ring   { animation: nb-ring 900ms ease-in-out; transform-origin: 50% 15%; }
+.nb-pop    { animation: nb-pop 260ms cubic-bezier(.34,1.56,.64,1); }
+.nb-panel  { animation: nb-panel 160ms cubic-bezier(.34,1.2,.64,1); transform-origin: top right; }
+.nb-row    { animation: nb-row 220ms ease-out backwards; }
+.nb-pulse  { animation: nb-pulse 1.4s ease-in-out infinite; }
+.nb-halo   { animation: nb-halo 1.8s ease-out infinite; }
+.nb-dial   { transition: stroke-dashoffset 900ms linear; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-ring, .nb-pop, .nb-panel, .nb-row, .nb-pulse, .nb-halo { animation: none; }
+  .nb-dial { transition: none; }
+}
