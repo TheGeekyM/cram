@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
+import { ask } from '../components/Confirm.jsx'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
@@ -8,7 +9,7 @@ const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60
 // id must match server LANGS. [id, label, short badge, badge color, file ext]
 export const LANGS = [
   ['javascript', 'JavaScript', 'JS', '#f7df1e', 'js'], ['typescript', 'TypeScript', 'TS', '#3178c6', 'ts'], ['python', 'Python', 'Py', '#3776ab', 'py'],
-  ['java', 'Java', 'Jv', '#e76f00', 'java'], ['cpp', 'C++', 'C++', '#00599c', 'cpp'], ['rust', 'Rust', 'Rs', '#dea584', 'rs'], ['csharp', 'C#', 'C#', '#a78bfa', 'cs'], ['php', 'PHP', 'php', '#777bb4', 'php'], ['csharp', 'C#', 'C#', '#512bd4', 'cs'],
+  ['java', 'Java', 'Jv', '#e76f00', 'java'], ['cpp', 'C++', 'C++', '#00599c', 'cpp'], ['rust', 'Rust', 'Rs', '#dea584', 'rs'], ['csharp', 'C#', 'C#', '#512bd4', 'cs'], ['php', 'PHP', 'php', '#777bb4', 'php'],
 ]
 const langOf = id => LANGS.find(l => l[0] === id) || LANGS[0]
 const GLYPHS = ['{ }', '=>', 'O(n)', '[ ]', 'fn', '&&', '::', '//', 'λ', '0x', '</>', 'if', '∑', '++', '?:', 'ret']
@@ -136,7 +137,7 @@ function Arena({ study, ch, setCh, onExit }) {
     patch({ code, elapsed, passed: r.passed, ...(solved && ch.status === 'open' ? { status: 'solved' } : {}) })
   }
   const ask = async () => { setReviewing(true); setReview(''); await api.stream(`${base}/review`, { code, results: res }, setReview); setReviewing(false) }
-  const giveUp = () => { if (confirm('Give up on this one? The timer stops and it stays in your list.')) patch({ status: 'given-up', elapsed, code }) }
+  const giveUp = async () => { if (await ask({ title: 'Give up on this one?', body: 'The timer stops and the challenge stays in your list as given up. You can still ask the coach or get a review.', ok: 'Give up' })) patch({ status: 'given-up', elapsed, code }) }
   const tab = e => { if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; setCode(code.slice(0, s) + '    ' + code.slice(t.selectionEnd)); requestAnimationFrame(() => t.selectionStart = t.selectionEnd = s + 4) } }
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
@@ -183,7 +184,7 @@ export default function CodeArena({ study, setStudy }) {
     setBusy(true); const c = await api.post(`/api/studies/${study.id}/challenge`, opts); setBusy(false)
     if (c.error) return alert(c.error); setStudy(s => ({ ...s, challenges: [...s.challenges, c] })); setActive(c)
   }
-  const del = async c => { if (!confirm(`Delete «${c.title}»?`)) return; await api.del(`/api/studies/${study.id}/challenge/${c.id}`); setStudy(s => ({ ...s, challenges: s.challenges.filter(x => x.id !== c.id) })) }
+  const del = async c => { if (!await ask({ title: `Delete «${c.title}»?`, body: 'The challenge, your code, the coach chat and the timer are removed.', ok: 'Delete' })) return; await api.del(`/api/studies/${study.id}/challenge/${c.id}`); setStudy(s => ({ ...s, challenges: s.challenges.filter(x => x.id !== c.id) })) }
   if (active) return <Arena study={study} ch={active} setCh={setCh} onExit={async () => { setActive(null); setStudy(await api.get(`/api/studies/${study.id}`)) }} />
   return <Lobby study={study} busy={busy} onStart={start} onOpen={setActive} onDelete={del} />
 }

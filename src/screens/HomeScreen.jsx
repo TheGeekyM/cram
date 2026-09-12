@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
 import NavBar from '../components/NavBar.jsx'
 import { api } from '../api.js'
+import { ask } from '../components/Confirm.jsx'
 
 // Same shape as aidle's SetupScreen: hero header, two action tiles, a list of rows with a
 // hover kebab. Rows here are studies instead of workspaces.
@@ -66,10 +67,10 @@ function NewDialog({ mode, onClose, onCreated }) {
 }
 
 export default function HomeScreen({ studies, onOpen, onCreated, onDeleted }) {
-  const [q, setQ] = useState(''); const [searching, setSearching] = useState(false); const [mode, setMode] = useState(null); const [del, setDel] = useState(null)
+  const [q, setQ] = useState(''); const [searching, setSearching] = useState(false); const [mode, setMode] = useState(null)
   const ref = useRef(); useEffect(() => { if (searching) ref.current?.focus() }, [searching])
   const list = useMemo(() => { const k = q.trim().toLowerCase(); return k ? studies.filter(s => (s.title + ' ' + (s.subject || '')).toLowerCase().includes(k)) : studies }, [studies, q])
-  const confirmDelete = async () => { await api.del(`/api/studies/${del.id}`); setDel(null); onDeleted() }
+  const askDelete = async s => { if (!await ask({ title: `Delete «${s.title}»?`, body: 'Chat, quizzes, challenges, notes and the PDF copy are removed. This can\'t be undone.', ok: 'Delete study' })) return; await api.del(`/api/studies/${s.id}`); onDeleted() }
   return (
     <div className="h-full flex flex-col">
       <NavBar />
@@ -86,21 +87,12 @@ export default function HomeScreen({ studies, onOpen, onCreated, onDeleted }) {
             <ActionTile icon={PDF} title="From a PDF…" sub="Attach lecture notes, a book, a paper" onClick={() => setMode('pdf')} />
           </div>
           <div className="island p-1.5">
-            {list.length ? list.map(s => <Row key={s.id} s={s} onOpen={onOpen} onDelete={setDel} />)
+            {list.length ? list.map(s => <Row key={s.id} s={s} onOpen={onOpen} onDelete={askDelete} />)
               : <div className="text-center text-xs text-dim py-10">{q ? `Nothing matches «${q}».` : 'No studies yet — start from a subject or a PDF.'}</div>}
           </div>
         </div>
       </div>
       {mode && <NewDialog mode={mode} onClose={() => setMode(null)} onCreated={id => { setMode(null); onCreated(id) }} />}
-      {del && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={() => setDel(null)}>
-          <div className="island w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
-            <div className="text-sm font-semibold text-white mb-1">Delete «{del.title}»?</div>
-            <div className="text-xs text-dim mb-4">Chat, quizzes, notes and the PDF copy are removed. This can't be undone.</div>
-            <div className="flex justify-end gap-2"><button className="btn btn-ghost" onClick={() => setDel(null)}>Cancel</button><button className="btn-tint btn-red" onClick={confirmDelete}>Delete</button></div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

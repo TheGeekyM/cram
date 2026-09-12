@@ -3,6 +3,7 @@ import HomeScreen from './screens/HomeScreen.jsx'
 import StudyScreen from './screens/StudyScreen.jsx'
 import NotesScreen from './screens/NotesScreen.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
+import ConfirmHost from './components/Confirm.jsx'
 import { api } from './api.js'
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
       {screen === 'home' && <HomeScreen studies={studies} onOpen={open} onCreated={open} onDeleted={reload} />}
       {screen === 'study' && study && <StudyScreen study={study} setStudy={setStudy} settings={settings} onHome={home} onNotes={() => setScreen('notes')} />}
       {screen === 'notes' && study && <NotesScreen project={project} onHome={home} onBack={() => setScreen('study')} />}
+      <ConfirmHost />
       {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} onChange={loadSettings} />}
     </div>
   )
