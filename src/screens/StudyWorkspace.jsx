@@ -98,7 +98,7 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
         {tool === 'review' && <Review studies={one} scope={study.id} bar="study" onChanged={onChanged} />}
         {tool === 'coach' && <div className="h-full px-2.5 pb-2.5"><StudyCoach studyId={study.id} bar="study" onBack={() => setTool('chat')} /></div>}
       </div>
-      <aside className="w-56 flex-shrink-0 border-l border-border bg-panel flex flex-col p-2 gap-0.5 overflow-y-auto">
+      <aside className="island w-56 flex-shrink-0 my-2.5 mr-2.5 flex flex-col p-2 gap-0.5 overflow-y-auto">
         <div className="px-2.5 pt-2 pb-3">
           <div className="text-sm font-semibold text-white truncate" dir="auto" title={study.title}>{study.title}</div>
           <div className="text-[11px] text-dim truncate" dir="auto">{study.subject || (study.hasPdf ? 'From a PDF' : 'Study')}{study.hasPdf && study.subject ? ' · PDF' : ''}</div>
