@@ -373,12 +373,16 @@
 .nt-editor > :first-child { margin-top: 0; }
 .nt-editor h1 + h2, .nt-editor h2 + h3 { margin-top: 0.7rem; }
 .nt-editor p { margin: 0.55rem 0; }
-.nt-editor ul { list-style: disc; padding-left: 1.5rem; margin: 0.55rem 0; }
-.nt-editor ol { list-style: decimal; padding-left: 1.5rem; margin: 0.55rem 0; }
+.nt-editor ul { list-style: disc; padding-inline-start: 1.5rem; margin: 0.55rem 0; }
+.nt-editor ol { list-style: decimal; padding-inline-start: 1.5rem; margin: 0.55rem 0; }
+/* An aligned list takes its bullets/numbers along; dir=rtl on the list is what flips their side. */
+:is(.nt-editor, .nt-page) :is(ul, ol)[style*="text-align"] { list-style-position: inside; }
+/* …and an inside marker sits on its own line before a block <p>, so the item's first paragraph runs inline with it. */
+:is(.nt-editor, .nt-page) :is(ul, ol)[style*="text-align"] > li > p:first-child { display: inline; }
 .nt-editor li { margin: 0.22rem 0; }
 .nt-editor li::marker { color: rgb(var(--c-dim)); }
 .nt-editor a { color: rgb(var(--c-accent)); text-decoration: underline; }
-.nt-editor blockquote { border-left: 2px solid rgb(var(--c-accent) / 0.5); padding: 0.1rem 0 0.1rem 0.9rem; margin: 0.9rem 0; color: rgb(var(--c-gray-300)); }
+.nt-editor blockquote { border-inline-start: 2px solid rgb(var(--c-accent) / 0.5); padding-block: 0.1rem; padding-inline: 0.9rem 0; margin: 0.9rem 0; color: rgb(var(--c-gray-300)); }
 /* Code blocks: hljs paints the tokens, but its theme hardcodes a dark bg/fg — these two
    win on specificity so the block still follows the app theme. */
 .nt-editor pre { position: relative; background: rgb(var(--c-panel-2)); color: rgb(var(--c-gray-100)); border: 1px solid rgb(var(--c-border)); padding: 0.7rem 0.9rem; border-radius: 0.5rem; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 0.8125rem; line-height: 1.6; margin: 0.6rem 0; white-space: pre-wrap; }
@@ -467,7 +471,7 @@
 }
 .nt-editor hr { border: none; border-top: 1px solid rgb(var(--c-border)); margin: 1.6rem 0; }
 /* To-dos: Tiptap task lists, plus .nt-todo from notes written under the old editor. */
-.nt-editor ul[data-type="taskList"] { list-style: none; padding-left: 0.2rem; }
+.nt-editor ul[data-type="taskList"] { list-style: none; padding-inline-start: 0.2rem; }
 .nt-editor ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 0.5rem; }
 .nt-editor ul[data-type="taskList"] li > div { flex: 1 1 auto; min-width: 0; }
 .nt-editor ul[data-type="taskList"] li[data-checked="true"] > div { color: rgb(var(--c-dim)); text-decoration: line-through; }
@@ -572,9 +576,9 @@
 }
 .nt-page h2 + h3 { margin-top: 0.9rem; }
 
-.nt-page ul { list-style: disc; padding-left: 1.35rem; margin: 0.8rem 0; }
-.nt-page ol { list-style: decimal; padding-left: 1.35rem; margin: 0.8rem 0; }
-.nt-page li { margin: 0.35rem 0; padding-left: 0.15rem; }
+.nt-page ul { list-style: disc; padding-inline-start: 1.35rem; margin: 0.8rem 0; }
+.nt-page ol { list-style: decimal; padding-inline-start: 1.35rem; margin: 0.8rem 0; }
+.nt-page li { margin: 0.35rem 0; padding-inline-start: 0.15rem; }
 .nt-page li::marker { color: rgb(var(--c-accent) / 0.7); font-family: ui-monospace, monospace; font-size: 0.85em; }
 .nt-page blockquote {
   border-left: 2px solid rgb(var(--c-border));

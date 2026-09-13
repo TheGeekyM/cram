@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { useEditor, useEditorState, EditorContent, ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent } from '@tiptap/react'
-import { mergeAttributes } from '@tiptap/core'
+import { mergeAttributes, Extension } from '@tiptap/core'
+import { Plugin } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { TaskList, TaskItem } from '@tiptap/extension-list'
@@ -25,6 +26,55 @@ import { childrenOf, isDescendant } from '../core/notesTree.mjs'
 // speak HTML.
 
 const lowlight = createLowlight(common)
+
+// Alignment and direction per paragraph/heading, stored as plain style/dir attributes in the HTML.
+// ponytail: own 20 lines instead of @tiptap/extension-text-align, which has no dir anyway.
+// Lists carry them too: a list's dir is what moves its bullets/numbers to the other side.
+const BLOCKS = ['paragraph', 'heading', 'bulletList', 'orderedList', 'taskList', 'blockquote']
+const BlockLayout = Extension.create({
+  name: 'blockLayout',
+  addGlobalAttributes: () => [{ types: BLOCKS, attributes: {
+    textAlign: { default: null, parseHTML: el => el.style.textAlign || null, renderHTML: a => a.textAlign ? { style: `text-align: ${a.textAlign}` } : {} },
+    dir: { default: null, parseHTML: el => el.getAttribute('dir'), renderHTML: a => a.dir ? { dir: a.dir } : {} },
+  } }],
+  // A list or quote made out of aligned/RTL lines (toolbar, slash menu, "- ") starts bare, so its
+  // bullets would sit on the left; give it its first line's layout. Explicit LTR/left on it is non-null and kept.
+  // ponytail: walks the whole note per change, fine at note size
+  addProseMirrorPlugins: () => [new Plugin({
+    appendTransaction: (trs, _, state) => {
+      if (!trs.some(t => t.docChanged)) return
+      let tr = null
+      state.doc.descendants((node, pos) => {
+        if (!CONTAINERS.includes(node.type.name) || (node.attrs.dir && node.attrs.textAlign)) return
+        let first = null
+        node.descendants(n => { if (!first && n.isTextblock) first = n; return !first })
+        // each key on its own: a right-aligned list with no dir still needs the RTL of its lines
+        const dir = node.attrs.dir || first?.attrs.dir || null, textAlign = node.attrs.textAlign || first?.attrs.textAlign || null
+        if (dir !== node.attrs.dir || textAlign !== node.attrs.textAlign) (tr ??= state.tr).setNodeMarkup(pos, undefined, { ...node.attrs, dir, textAlign })
+      })
+      return tr
+    },
+  })],
+})
+// Picking the value already set clears it: back to the start edge / dir=auto. Inside a list or quote
+// the button reads the container, so a list whose paragraphs are already RTL still gets its own dir.
+const CONTAINERS = ['bulletList', 'orderedList', 'taskList', 'blockquote']
+const blockIs = (e, key, value) => {
+  const types = CONTAINERS.some(t => e.isActive(t)) ? CONTAINERS : ['paragraph', 'heading']
+  return types.some(t => e.isActive(t, { [key]: value }))
+}
+// Inside a list/quote it covers the whole outermost one and every line in it, so clearing RTL from
+// one item can't leave the other items RTL (the copy-from-first-line plugin would put it back).
+const setBlock = (e, key, value) => {
+  const next = blockIs(e, key, value) ? null : value
+  return e.chain().focus().command(({ tr }) => {
+    const { $from, $to } = tr.selection
+    let from = $from.pos, to = $to.pos
+    for (let d = $from.depth; d > 0; d--) if (CONTAINERS.includes($from.node(d).type.name)) { from = $from.before(d); to = Math.max(to, $from.after(d)) }
+    tr.doc.nodesBetween(from, to, (n, pos) => { if (BLOCKS.includes(n.type.name)) tr.setNodeMarkup(pos, undefined, { ...n.attrs, [key]: next }) })
+    return true
+  }).run()
+}
 
 const uid = () => `note_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
 const snippet = (html) => (html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)
@@ -334,6 +384,9 @@ const TableIcon = () => (
     <line x1="3" y1="10" x2="21" y2="10" /><line x1="9" y1="10" x2="9" y2="20" /><line x1="15" y1="10" x2="15" y2="20" />
   </Ico>
 )
+const AlignIcon = ({ rows }) => (
+  <Ico>{rows.map(([x1, x2], i) => <line key={i} x1={x1} y1={6 + i * 6} x2={x2} y2={6 + i * 6} />)}</Ico>
+)
 const ClearIcon = () => (
   <Ico>
     <path d="m7 21-4.3-4.3a2 2 0 0 1 0-2.8l9.6-9.6a2 2 0 0 1 2.8 0l5.6 5.6a2 2 0 0 1 0 2.8L13 21" />
@@ -543,6 +596,12 @@ const TOOLS = [
   { icon: <TableIcon />, title: 'Table', on: e => e.isActive('table'),
     run: e => e.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
   { sep: true },
+  { icon: <AlignIcon rows={[[4, 20], [4, 14], [4, 18]]} />, title: 'Align left', run: e => setBlock(e, 'textAlign', 'left'), on: e => blockIs(e, 'textAlign', 'left') },
+  { icon: <AlignIcon rows={[[4, 20], [7, 17], [5, 19]]} />, title: 'Align center', run: e => setBlock(e, 'textAlign', 'center'), on: e => blockIs(e, 'textAlign', 'center') },
+  { icon: <AlignIcon rows={[[4, 20], [10, 20], [6, 20]]} />, title: 'Align right', run: e => setBlock(e, 'textAlign', 'right'), on: e => blockIs(e, 'textAlign', 'right') },
+  { label: 'LTR', cls: 'text-[10px] font-semibold', title: 'Left-to-right', run: e => setBlock(e, 'dir', 'ltr'), on: e => blockIs(e, 'dir', 'ltr') },
+  { label: 'RTL', cls: 'text-[10px] font-semibold', title: 'Right-to-left', run: e => setBlock(e, 'dir', 'rtl'), on: e => blockIs(e, 'dir', 'rtl') },
+  { sep: true },
   { icon: <ClearIcon />, title: 'Clear formatting', run: e => e.chain().focus().unsetAllMarks().clearNodes().run(), on: () => false },
 ]
 
@@ -654,7 +713,7 @@ export default function NotesScreen({ project, onHome, studyId, embedded }) {
       TaskItem.configure({ nested: true }),
       // Draggable column widths, Tab to move between cells, Enter for a new paragraph in one.
       TableKit.configure({ table: { resizable: true } }),
-      TextStyle, Color, BackgroundColor, FontFamily,
+      TextStyle, Color, BackgroundColor, FontFamily, BlockLayout,
       Placeholder.configure({ placeholder: 'Write something… press “/” for headings, lists, and to-dos.' }),
     ],
     editorProps: {
@@ -963,7 +1022,7 @@ export default function NotesScreen({ project, onHome, studyId, embedded }) {
   })
 
   return (
-    <div className={`${embedded ? 'h-full' : 'h-screen'} bg-app flex flex-col overflow-hidden`}>
+    <div className="h-full bg-app flex flex-col overflow-hidden">{/* h-full, not h-screen: it lives in App's pane and would cover the tab row below */}
       {!embedded && <NavBar title="Notes" onHome={onHome} />}
 
       <div className="flex-1 flex overflow-hidden bg-app p-2.5 gap-2.5">

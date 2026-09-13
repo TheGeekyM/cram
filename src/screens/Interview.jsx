@@ -32,7 +32,7 @@ const roundName = id => ROUNDS.find(r => r[0] === id)?.[1] || id
 const SENIORITY = ['junior', 'mid', 'senior', 'lead']
 const real = iv => iv.mode === 'real'
 const PERSONA_OPTS = ['friendly', 'neutral', 'tough']
-// "give me a second" style utterances: the mic keeps listening instead of counting down to send
+// "give me a second" style utterances: heard, but not written into the answer
 const THINK = /^(ثانية|ثانيه|ثواني|لحظة|لحظه|استنى|استني|خليني ?(أفكر|افكر)|دقيقة|دقيقه|let me think|give me a (sec|second|moment|minute)|one (sec|second|moment)|hold on|hmm+|umm*)[\s.!?؟،,]*$/i
 const FILLERS = /(^|[\s،,.])(يعني|امم+|آآ+|um+|uh+|you know|basically)(?=$|[\s،,.])/gi
 const VERDICT = { strong_hire: ['Strong hire', 'badge-green'], hire: ['Hire', 'badge-green'], lean_hire: ['Leaning hire', 'badge-blue'], lean_no_hire: ['Leaning no hire', 'badge-yellow'], no_hire: ['No hire', 'badge-red'] }
@@ -502,14 +502,90 @@ function AnswerBubble({ t }) {
 const MIC_LABEL = { loading: 'Starting the mic…', listening: 'Listening…', speaking: 'Hearing you…', transcribing: 'Writing it down…' }
 const HintBubble = ({ text }) => <div className="max-w-[85%] ps-[42px]" style={{ animation: 'iv-in .25s ease-out both' }}><div dir={dirOf(text)} className="rounded-xl bg-warning/10 border border-warning/30 px-3 py-2 text-sm text-gray-200"><span className="text-[10px] uppercase tracking-wider text-warning me-2">Hint</span>{text}</div></div>
 
+// pick questions to write, with their right answers, into this interview's note; ones already in it start unticked
+function QaNoteDialog({ iv, base, setIv, onClose }) {
+  const [has, setHas] = useState(null) // does this interview's note still exist? null while checking
+  const [sel, setSel] = useState(new Set()); const [busy, setBusy] = useState(false); const [err, setErr] = useState(''); const [done, setDone] = useState(null)
+  const fresh = ok => new Set(iv.turns.map((t, i) => ok && t.inNote ? -1 : i).filter(i => i >= 0))
+  useEffect(() => { api.post('/api/notes/list', { extraFolders: [] }).then(r => { const ok = !!iv.qaNote && !!r.notes?.some(x => x.id === iv.qaNote); setHas(ok); setSel(fresh(ok)) }) }, []) // eslint-disable-line
+  const [prog, setProg] = useState({}) // turn index → 'done' | 'failed' while the note is written
+  const toggle = i => setSel(s => { const c = new Set(s); c.has(i) ? c.delete(i) : c.add(i); return c })
+  const run = async () => {
+    setBusy(true); setErr(''); setProg({})
+    const handle = m => {
+      if (m.done != null) setProg(p => ({ ...p, [m.done]: 'done' }))
+      else if (m.failed != null) setProg(p => ({ ...p, [m.failed]: 'failed' }))
+      else if (m.result) { setIv(m.result.iv); window.dispatchEvent(new Event('cram:notes-changed')); setDone({ ...m.result.note, failed: m.result.failed }) }
+      else if (m.error) setErr(m.error)
+    }
+    try { // the server streams one JSON line per finished question
+      const res = await fetch(`${base}/qa-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turns: [...sel] }) })
+      if (!/json/.test(res.headers.get('content-type') || '')) throw new Error(`${res.status}: the app's server is not running the latest version. Restart Cram.`)
+      const reader = res.body.getReader(), dec = new TextDecoder(); let buf = ''
+      for (;;) {
+        const { value, done } = await reader.read(); buf += dec.decode(value || new Uint8Array(), { stream: !done })
+        const lines = buf.split('\n'); buf = done ? '' : lines.pop()
+        lines.filter(l => l.trim()).forEach(l => handle(JSON.parse(l)))
+        if (done) break
+      }
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  const written = Object.values(prog).filter(v => v === 'done').length, failed = Object.values(prog).filter(v => v === 'failed').length
+  const link = 'text-dim hover:text-white'
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={busy ? undefined : onClose}>
+      <div className="island w-full max-w-2xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true" aria-labelledby="qa-title" onClick={e => e.stopPropagation()}>
+        <div className="p-5 pb-3">
+          <h3 id="qa-title" className="text-base font-semibold text-white">Questions and answers to Notes</h3>
+          <p className="text-xs text-dim mt-1">Each picked question is written with its right answer, grouped by topic{has ? ', added to the end of this interview’s note.' : ', in a new note.'}</p>
+        </div>
+        {done ? <div className="px-5 pb-5 flex flex-col gap-4">
+          <div className="text-sm text-gray-200">Saved {sel.size - done.failed} question{sel.size - done.failed === 1 ? '' : 's'} to <b className="text-white">«{done.title}»</b> in Notes.</div>
+          {done.failed > 0 && <div className="text-xs text-warning">{done.failed} could not be written. Open Q&A note again: they are still ticked under “Not in note yet”.</div>}
+          <button onClick={onClose} className="btn btn-primary self-end">Done</button>
+        </div> : <>
+          <div className="px-5 pb-2 flex items-center gap-3 text-xs">
+            <span className="text-dim me-auto">{sel.size} of {iv.turns.length} selected</span>
+            <button className={link} onClick={() => setSel(fresh(false))}>All</button>
+            {has && <button className={link} onClick={() => setSel(fresh(true))}>Not in note yet</button>}
+            <button className={link} onClick={() => setSel(new Set())}>None</button>
+          </div>
+          {busy && <div className="mx-5 mb-2 h-1.5 rounded-full bg-panel-2 overflow-hidden"><div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${(written + failed) / sel.size * 100}%` }} /></div>}
+          <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-2 flex flex-col gap-0.5">
+            {has === null ? <div className="text-xs text-dim p-3 flex items-center gap-2"><Spin />Checking your notes…</div> : iv.turns.map((t, i) => (
+              <label key={i} className={`flex items-start gap-3 px-2.5 py-2 rounded-lg transition-colors ${busy ? (sel.has(i) ? (prog[i] === 'done' ? 'bg-success/5' : '') : 'opacity-40') : 'cursor-pointer hover:bg-white/5'}`}>
+                {busy && sel.has(i)
+                  ? <span className="mt-0.5 w-4 h-4 grid place-items-center flex-shrink-0" aria-label={prog[i] || 'writing'}>{prog[i] === 'done' ? <span className="w-4 h-4 rounded-full bg-success text-app grid place-items-center" style={{ animation: 'iv-in .2s ease-out both' }}><Ico s={10} d={<path d="M20 6 9 17l-5-5"/>} /></span> : prog[i] === 'failed' ? <span className="w-4 h-4 rounded-full bg-error text-app grid place-items-center"><Ico s={10} d={<><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>} /></span> : <Spin />}</span>
+                  : <input type="checkbox" className="mt-1 flex-shrink-0" style={{ accentColor: 'rgb(var(--c-accent))' }} checked={sel.has(i)} disabled={busy} onChange={() => toggle(i)} />}
+                <span className="min-w-0 flex-1">
+                  <span dir={dirOf(t.q)} className="block text-sm text-gray-100">{t.q}</span>
+                  <span className="text-[11px] text-dim">Q{i + 1}{t.topic ? ` · ${t.topic}` : ''} · <b className={`font-mono ${tone(t.score)}`}>{t.score}/10</b></span>
+                </span>
+                {has && t.inNote && <span className="badge-green py-0 text-[10px] flex-shrink-0">in note</span>}
+              </label>))}
+          </div>
+          <div className="p-4 flex items-center gap-2 border-t border-border">
+            {err && <span className="text-xs text-error truncate">{err}</span>}
+            {busy && !err && <span className="text-xs text-dim"><b className="text-white font-mono">{written}</b> of {sel.size} written · <b className="text-white font-mono">{sel.size - written - failed}</b> remaining{failed ? <span className="text-error"> · {failed} failed</span> : ''}</span>}
+            <button onClick={onClose} disabled={busy} className="btn-ghost ms-auto">Cancel</button>
+            <button disabled={busy || !sel.size || has === null} onClick={run} className="btn btn-primary inline-flex items-center gap-1.5">{busy ? <><Spin />Writing the note…</> : `Write ${sel.size} to Notes`}</button>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
 function Session({ study, iv, setIv, onBack, bar }) {
   const [draft, setDraft] = useState(''); const [busy, setBusy] = useState(false); const [preparing, setPreparing] = useState(false)
   const [elapsed, setElapsed] = useState(iv.elapsed || 0); const [qStart, setQStart] = useState(iv.elapsed || 0); const [err, setErr] = useState('')
   const [voice, setVoice] = useState(() => localStorage.getItem('cram:voice-interview') !== '0') // interviewer speaks + mic opens after each question
   const [shown, setShown] = useState(null) // { q, n }: how much of the pending question is on screen
   const [speaking, setSpeaking] = useState(null) // { key, phase: 'loading' | 'playing' }
-  const [sendIn, setSendIn] = useState(0); const manual = useRef(false) // voice answers send themselves after a quiet moment, unless you start typing
-  const [hold, setHold] = useState(0); const [hinting, setHinting] = useState(false); const barged = useRef(false)
+  const [hinting, setHinting] = useState(false); const barged = useRef(false) // voice answers are only written down: you press Send
+  const [sent, setSent] = useState(null) // the answer on its way: shown in the chat while it is graded
+  const [qa, setQa] = useState(false) // the Q&A note picker
   const talk = useRef({ secs: 0, pauses: 0, lastEnd: 0 }) // how this answer was spoken: seconds of speech and long pauses between utterances
   const nextReq = useRef(null); const end = useRef(); const box = useRef()
   const base = `/api/studies/${study.id}/interviews/${iv.id}`; const open = iv.status === 'open'; const { n, ok, avg } = stats(iv); const q = iv.pending
@@ -521,12 +597,11 @@ function Session({ study, iv, setIv, onBack, bar }) {
   const mic = useMic({
     lang: iv.language,
     onText: (t, info) => {
-      if (THINK.test(t.trim()) && t.trim().split(/\s+/).length <= 6) return setHold(Date.now() + 20000) // "give me a second": wait, don't write it down
+      if (THINK.test(t.trim()) && t.trim().split(/\s+/).length <= 6) return // "give me a second": don't write it down
       const k = talk.current
       if (info) { if (k.lastEnd && info.endAt - info.secs * 1000 - k.lastEnd > 2500) k.pauses++; k.secs += info.secs; k.lastEnd = info.endAt }
-      setHold(0); setDraft(d => (d ? `${d} ${t}` : t)); setErr('')
+      setDraft(d => (d ? `${d} ${t}` : t)); setErr('')
     },
-    onSpeechStart: () => setSendIn(0),
     onError: setErr,
   })
   const micRef = useRef(); micRef.current = mic
@@ -544,7 +619,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
   // a new question: speak it while the text streams in, then open the mic
   useEffect(() => {
     if (!open || !q || preparing) return
-    let live = true; manual.current = false; setDraft(''); setSendIn(0); setHold(0); barged.current = false; talk.current = { secs: 0, pauses: 0, lastEnd: 0 }
+    let live = true; setDraft(''); barged.current = false; talk.current = { secs: 0, pauses: 0, lastEnd: 0 }
     const reveal = k => live && setShown({ q: q.q, n: k })
     const spoken = [q.q, ...(q.choices || []).map((c, j) => `${'ABCD'[j]}. ${c}`)].join('. ')
     ;(async () => {
@@ -568,13 +643,13 @@ function Session({ study, iv, setIv, onBack, bar }) {
   const submit = async (answer = draft.trim(), picked = null) => {
     if (busy || !q) return
     if (!answer && !await ask({ title: 'Submit without an answer?', body: 'It will be graded as a blank answer.', ok: 'Submit anyway', danger: false })) return
-    mic.stop(); stopSpeech(); setSendIn(0); setBusy(true); setErr('')
+    mic.stop(); stopSpeech(); setBusy(true); setErr(''); setSent(answer); setDraft('')
     const k = talk.current, words = answer.split(/\s+/).filter(Boolean).length
     const delivery = k.secs >= 2 && picked == null ? { secs: k.secs, words, wpm: words / (k.secs / 60), fillers: (answer.match(FILLERS) || []).length, longPauses: k.pauses } : null
     const r = await api.post(`${base}/answer`, { answer, picked, secs: elapsed - qStart, elapsed, delivery })
-    setBusy(false)
-    if (r.error) { setErr(r.error); return }
-    setDraft(''); setIv({ ...r, elapsed })
+    setBusy(false); setSent(null)
+    if (r.error) { setErr(r.error); if (picked == null) setDraft(answer); return } // grading failed: the answer goes back in the box
+    setIv({ ...r, elapsed })
     nextReq.current = api.post(`${base}/next`, {}); next()
   }
   const next = async () => {
@@ -585,14 +660,6 @@ function Session({ study, iv, setIv, onBack, bar }) {
   }
   // a resumed session with no pending question (graded, then closed) needs one
   useEffect(() => { if (open && !iv.pending && !preparing) next() }, [open]) // eslint-disable-line
-  // voice answers: once there is a real answer (a few words), 5 quiet seconds send it; talking again cancels, so thinking pauses are safe
-  useEffect(() => {
-    if (hold > Date.now()) { setSendIn(0); const t = setTimeout(() => setHold(0), hold - Date.now()); return () => clearTimeout(t) } // thinking time
-    if (!voice || manual.current || draft.trim().split(/\s+/).length < 3 || busy || mic.state !== 'listening') return setSendIn(0)
-    let left = 5; setSendIn(left)
-    const t = setInterval(() => { left--; setSendIn(left); if (left <= 0) { clearInterval(t); submit(ref.current.draft.trim()) } }, 1000)
-    return () => clearInterval(t)
-  }, [draft, mic.state, voice, busy, hold]) // eslint-disable-line
   useEffect(() => { end.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) }, [n, shown?.n, preparing, busy, draft])
 
   const setStatus = status => { api.post(base, { status, elapsed }); setIv({ ...iv, status, elapsed }) }
@@ -619,49 +686,58 @@ function Session({ study, iv, setIv, onBack, bar }) {
           <div className="font-mono text-base text-white tabular-nums flex items-center gap-1.5">{fmt(elapsed)}{open && <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />}</div>
           <div className={`text-[10px] uppercase tracking-wider ${open ? 'text-accent' : 'text-dim'}`}>{open ? 'running' : 'ended'}</div>
         </div>
-        {open && <button onClick={toggleVoice} className={`btn-tint ${voice ? 'btn-purple' : ''}`} title="The interviewer speaks each question and the mic opens for your answer">
-          {speaking?.phase === 'loading' ? <Spin /> : <Ico d={SPEAK} />}{voice ? 'Voice on' : 'Voice off'}</button>}
+        {n > 0 && <button onClick={() => setQa(true)} className="btn-tint" title="Write questions with their right answers into a note">
+          <Ico d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h4"/></>} />Q&A note</button>}
         {open ? <button onClick={finish} className="btn-tint btn-red" disabled={busy}><Ico d={<rect x="6" y="6" width="12" height="12" rx="2"/>} />End</button>
           : <button onClick={() => setStatus('open')} className="btn-tint btn-green"><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Resume</button>}
       </PageBar>
+      {qa && <QaNoteDialog iv={iv} base={base} setIv={r => setIv({ ...r, elapsed })} onClose={() => setQa(false)} />}
       {!open ? (
         <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2.5 pt-2.5">
           {n ? <Details iv={iv} base={base} setIv={setIv} /> : <div className="island p-5 text-sm text-dim text-center">No questions answered yet. Resume to get the first one.</div>}
         </div>
       ) : <>
         <div ref={box} className="flex-1 min-h-0 overflow-y-auto">
-          <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col gap-5">
+          <div className="max-w-4xl mx-auto px-4 py-6 flex flex-col gap-5">
             {iv.turns.map((t, i) => <React.Fragment key={i}>
               <AskBubble text={t.q} full={t.q} choices={t.type === 'choice' ? t.choices : null} picked={t.picked} answerIndex={t.answerIndex} tag={tagOf(t)} speaking={speaking?.key === `t${i}` && speaking.phase} onSpeak={() => replay(`t${i}`, t.q)} />
               <AnswerBubble t={t} />
             </React.Fragment>)}
-            {busy && <div className="self-end text-[11px] text-dim inline-flex items-center gap-1.5"><Spin />The interviewer is taking notes…</div>}
             {preparing && !busy && <AskBubble text="" full="." />}
             {q && !preparing && <AskBubble text={shown?.q === q.q ? q.q.slice(0, shown.n) : ''} full={q.q} choices={q.type === 'choice' ? q.choices : null} onPick={j => submit(`${'ABCD'[j]}. ${q.choices[j]}`, j)} busy={busy}
               tag={tagOf(q)} speaking={speaking?.key === 'q' && speaking.phase} onSpeak={() => replay('q', q.q)} />}
             {q?.hint && full && !preparing && <HintBubble text={q.hint} />}
+            {busy && sent != null && <>{/* after the question it answers: the question stays pending until grading is done */}
+              <div className="self-end -mb-3.5 pe-[42px] text-[11px] text-dim inline-flex items-center gap-1.5"><Spin />Reviewing your answer…</div>
+              <AnswerBubble t={{ answer: sent }} />
+            </>}
             <div ref={end} />
           </div>
         </div>
-        <div className="border-t border-border bg-panel px-4 py-3 flex-shrink-0">
-          <div className="max-w-3xl mx-auto flex flex-col gap-2">
-            {(err || mic.on || sendIn > 0) && <div className="flex items-center gap-2 text-[11px] min-h-[16px]">
+        <div className="px-4 pb-4 pt-2 flex-shrink-0">
+          <div className="max-w-4xl mx-auto flex flex-col gap-1.5">
+            {(err || mic.on) && <div className="flex items-center gap-2 text-[11px] min-h-[16px] px-4">
               {mic.on && <span className={`inline-flex items-center gap-1.5 ${mic.state === 'speaking' ? 'text-accent' : 'text-dim'}`}>{mic.state === 'loading' || mic.state === 'transcribing' ? <Spin /> : <span className={`w-2 h-2 rounded-full ${mic.state === 'speaking' ? 'bg-accent animate-pulse' : 'bg-success'}`} />}{MIC_LABEL[mic.state]}</span>}
-              {sendIn > 0 && <span className="text-dim">· sending in {sendIn}s, keep talking to add more</span>}
-              {hold > 0 && <span className="text-accent">· take your time, I'm listening</span>}
               {err && <span className="text-error truncate">{err}</span>}
             </div>}
-            <div className="flex items-end gap-2.5">
-              <button onClick={() => (mic.on ? mic.stop() : (barged.current = !!speaking, stopSpeech(), mic.start()))} disabled={busy || !q || (!full && !speaking)} title={mic.on ? 'Stop the mic' : 'Answer by voice'} aria-label={mic.on ? 'Stop the mic' : 'Answer by voice'}
-                className={`relative w-11 h-11 rounded-full grid place-items-center flex-shrink-0 transition-colors ${mic.on ? 'bg-accent text-app' : 'bg-app border border-border text-dim hover:text-white'}`}>
-                {mic.state === 'speaking' && <span className="absolute inset-0 rounded-full border-2 border-accent" style={{ animation: 'iv-ring 1.2s ease-out infinite' }} />}
-                {mic.state === 'loading' ? <Spin /> : <Ico s={18} d={MIC} />}
-              </button>
-              <textarea dir="auto" rows={5} className="input flex-1 resize-y min-h-[140px] max-h-[45vh] text-[15px] leading-relaxed" placeholder={!q || !full ? 'Wait for the question…' : voice ? 'Speak your answer, or type it… (Ctrl+Enter to send)' : 'Type your answer… (Ctrl+Enter to send)'}
-                value={draft} disabled={busy || !q} onChange={e => { manual.current = true; setSendIn(0); setDraft(e.target.value) }} onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && submit()} />
-              <div className="flex flex-col gap-2">
-                <button className="btn btn-primary h-11 inline-flex items-center justify-center gap-1.5" disabled={busy || !q || !full} onClick={() => submit()}>{busy ? <Spin /> : <>Send<Ico d={<path d="m9 18 6-6-6-6"/>} /></>}</button>
-                <button className="btn-tint h-9 inline-flex items-center justify-center gap-1.5 text-xs" disabled={busy || !q || !full || hinting || !!q?.hint} onClick={getHint} title="A small nudge. It costs 2 points on this answer.">{hinting ? <Spin /> : <Ico s={13} d={<><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></>} />}Hint</button>
+            {/* one chat box, Gemini style: the answer on top, every control in a row inside it */}
+            <div className="rounded-3xl border border-border bg-panel focus-within:border-accent/60 transition-colors px-4 pt-3 pb-2 flex flex-col gap-1">
+              <textarea dir="auto" rows={2} style={{ fieldSizing: 'content' }} className="w-full bg-transparent outline-none resize-none min-h-[56px] max-h-[40vh] text-[15px] leading-relaxed text-white placeholder:text-dim disabled:opacity-60"
+                placeholder={!q || !full ? 'Wait for the question…' : voice ? 'Speak your answer, or type it… (Enter to send, Shift+Enter for a new line)' : 'Type your answer… (Enter to send, Shift+Enter for a new line)'}
+                value={draft} disabled={busy || !q} onChange={e => setDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (full && draft.trim()) submit() } }} />
+              <div className="flex items-center gap-1">
+                <button className="h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-xs text-dim hover:text-white hover:bg-panel-2 disabled:opacity-40 disabled:pointer-events-none transition-colors" disabled={busy || !q || !full || hinting || !!q?.hint} onClick={getHint} title="A small nudge. It costs 2 points on this answer.">
+                  {hinting ? <Spin /> : <Ico s={14} d={<><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></>} />}Hint</button>
+                <button onClick={toggleVoice} className={`h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-xs transition-colors ${voice ? 'text-accent bg-accent/10 hover:bg-accent/20' : 'text-dim hover:text-white hover:bg-panel-2'}`} title="The interviewer speaks each question and the mic opens for your answer">
+                  {speaking?.phase === 'loading' ? <Spin /> : <Ico s={14} d={SPEAK} />}{voice ? 'Voice on' : 'Voice off'}</button>
+                <button onClick={() => (mic.on ? mic.stop() : (barged.current = !!speaking, stopSpeech(), mic.start()))} disabled={busy || !q || (!full && !speaking)} title={mic.on ? 'Stop the mic' : 'Answer by voice'} aria-label={mic.on ? 'Stop the mic' : 'Answer by voice'}
+                  className={`ms-auto relative w-10 h-10 rounded-full grid place-items-center flex-shrink-0 transition-colors disabled:opacity-40 ${mic.on ? 'bg-accent/15 text-accent' : 'text-dim hover:text-white hover:bg-panel-2'}`}>
+                  {mic.state === 'speaking' && <span className="absolute inset-0 rounded-full border-2 border-accent" style={{ animation: 'iv-ring 1.2s ease-out infinite' }} />}
+                  {mic.state === 'loading' ? <Spin /> : <Ico s={18} d={MIC} />}
+                </button>
+                <button className="w-10 h-10 rounded-full grid place-items-center flex-shrink-0 bg-accent text-app hover:brightness-110 disabled:bg-panel-2 disabled:text-dim transition-colors" disabled={busy || !q || !full || !draft.trim()} onClick={() => submit()} title="Send (Enter)" aria-label="Send">
+                  {busy ? <Spin /> : <Ico s={18} d={<><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></>} />}</button>
               </div>
             </div>
           </div>

@@ -151,6 +151,56 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
     res.json({ ok: true, note: { id: note.id, title: note.title } });
   });
 
+  // ---------- interview Q&A note: picked questions with their right answers, grouped by topic. One note per interview,
+  // grown on each export; turns written into it carry inNote so the picker can default to the rest ----------
+  app.post('/api/studies/:id/interviews/:iid/qa-note', async (req, res) => {
+    const s = findStudy(req, res); if (!s) return;
+    const iv = (s.interviews || []).find(x => x.id === req.params.iid); if (!iv) return res.status(404).json({ error: 'no such interview' });
+    const picked = [...new Set((Array.isArray(req.body?.turns) ? req.body.turns : []).map(Number))].filter(i => iv.turns[i]).sort((a, b) => a - b);
+    if (!picked.length) return res.status(400).json({ error: 'Pick at least one question.' });
+    // streamed as lines of JSON so the picker can tick questions off: {done: i} | {failed: i} per question, then {result} or {error}
+    res.setHeader('Content-Type', 'application/x-ndjson'); const send = m => res.write(JSON.stringify(m) + '\n');
+    const answers = new Map(); let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, picked.length) }, async () => { // ponytail: 4 answers at a time, raise if the CLI copes
+      while (next < picked.length) {
+        const i = picked[next++], t = iv.turns[i];
+        try {
+          const r = await json(s, `Write a study note: the correct answer to this interview question that the learner should remember. ${/arab/i.test(iv.language) ? 'Write in Egyptian Arabic, keeping technical terms in English.' : 'Write in English.'}
+Never mention, quote or grade the learner's own answer. Teach it as a model interview conversation the learner can study and replay, in this markdown layout (translate the labels when not writing English):
+1. A bold line "Correct answer:" with the direct answer in one or two sentences.
+2. A bold line "The conversation:" then a realistic exchange of 4-8 turns, each turn its own paragraph starting "**🎤 Interviewer:**" or "**✅ Strong candidate:**". The candidate gives the right answer the way a senior would say it out loud; the interviewer pushes back with the follow-ups a real interviewer asks next (why, what if it fails, trade-offs, scale, an edge case), and the candidate answers each one.
+3. After any candidate turn with an idea worth learning, a blockquote line "> 💡 **Why:** ..." explaining the reasoning behind it in plain words.
+4. A bold line "Remember:" then 3-5 short bullets: the key points, plus the common mistake that loses marks on this question.
+Add a small example or code snippet inside a candidate turn only when it really helps. No heading and do not repeat the question.
+Question${t.topic ? ` [${t.topic}]` : ''}: ${t.q}
+Respond with ONLY JSON: {"topic": short topic label, "answer": markdown string}`);
+          if (!r.answer) throw new Error('no answer came back');
+          answers.set(i, r); send({ done: i });
+        } catch (e) { send({ failed: i, error: e.message }); }
+      }
+    }));
+    if (!answers.size) { send({ error: 'No answers came back. Try again.' }); return res.end(); }
+    try {
+      const groups = new Map();
+      for (const i of picked) { const x = answers.get(i); if (!x) continue; const k = String(iv.turns[i].topic || x.topic || 'General'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(`### ${esc(iv.turns[i].q)}\n\n${x.answer}`); }
+      const html = marked.parse([...groups].map(([k, L]) => `## ${esc(k)}\n\n${L.join('\n\n')}`).join('\n\n'));
+      // the study may have changed during the call (an answer graded): write into a fresh copy
+      const s2 = study(req.params.id), iv2 = (s2.interviews || []).find(x => x.id === iv.id); if (!iv2) throw new Error('This interview was deleted.');
+      const notes = loadNotes(), now = Date.now(); let note = iv2.qaNote && notes.find(n => n.id === iv2.qaNote);
+      if (note) { note.content += html; note.updatedAt = now; }
+      else { // first export, or the old note was deleted
+        iv2.turns.forEach(t => delete t.inNote);
+        const name = iv2.mode === 'real' ? `${iv2.role} · ${iv2.round}` : `${s2.title} · ${iv2.difficulty}`;
+        note = { id: `qa-${now.toString(36)}`, title: `${name} interview · Q&A`, content: marked.parse(`*Questions and right answers from a Cram interview on ${new Date(iv2.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.*`) + html, parent: '', ...(s2.general ? {} : { studyId: s2.id }), createdAt: now, updatedAt: now };
+        notes.unshift(note); iv2.qaNote = note.id;
+      }
+      saveNotes(null, notes);
+      for (const i of answers.keys()) if (iv2.turns[i]) iv2.turns[i].inNote = true;
+      save(s2); send({ result: { iv: iv2, note: { id: note.id, title: note.title }, failed: picked.length - answers.size } });
+    } catch (e) { send({ error: e.message }); }
+    res.end();
+  });
+
   // ---------- adaptive next challenge: harder after a solve, a focused smaller one after a miss ----------
   app.post('/api/studies/:id/challenge/:cid/next', async (req, res) => {
     const s = findStudy(req, res); if (!s) return;

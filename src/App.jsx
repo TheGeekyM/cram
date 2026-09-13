@@ -73,7 +73,10 @@ function Sidebar({ page, go, profile, onProfile, due, onPalette, hidden }) {
 export default function App() {
   const [studies, setStudies] = useState([]); const [open, setOpen] = useState({})
   const [page, setPage] = useState('dashboard'); const [current, setCurrent] = useState(() => localStorage.getItem('cram:study') || null)
-  const [visited, setVisited] = useState({}) // pane → true once shown, so panes stay mounted (and keep streams/timers) while you move around
+  // open tabs, like a browser: { page } or { page: 'study', sid, tool }. A pane stays mounted (keeps streams/timers) while its tab is open.
+  // ponytail: one tab per page and per study (header slots and #ws-side are single ids), and only the active study tab is mounted;
+  // per-tab slot ids if two tabs of the same page are ever needed
+  const [tabs, setTabs] = useState([{ page: 'dashboard' }])
   const [settings, setSettings] = useState(null)
   const [profile, setProfile] = useState(null); const [editProfile, setEditProfile] = useState(false); const [stale, setStale] = useState('')
   const [newStudy, setNewStudy] = useState(null) // { mode, prefill, then: pane|null }
@@ -81,29 +84,39 @@ export default function App() {
 
   const reload = useCallback(async () => setStudies(await api.get('/api/studies')), [])
   const refreshDue = useCallback(() => api.get('/api/review').then(r => setDue(r.due || 0)).catch(() => {}), [])
-  const loadSettings = useCallback(async () => { const s = await api.get('/api/settings'); setSettings(s); if (!s.hasKey) setPage('settings'); return s }, [])
+  const loadSettings = useCallback(async () => { const s = await api.get('/api/settings'); setSettings(s); if (!s.hasKey) goRef.current('settings'); return s }, [])
   useEffect(() => { reload(); loadSettings(); api.get('/api/profile').then(p => { if (p.error) { setStale(p.error); p = {} } setProfile(p); if (!p.name && !localStorage.getItem('cram:onboarded')) { setEditProfile(true); localStorage.setItem('cram:onboarded', '1') } }) }, [reload, loadSettings])
-  useEffect(() => { const f = () => setPage('settings'); window.addEventListener('cram:settings', f); return () => window.removeEventListener('cram:settings', f) }, [])
+  useEffect(() => { const f = () => goRef.current('settings'); window.addEventListener('cram:settings', f); return () => window.removeEventListener('cram:settings', f) }, [])
   useEffect(() => { if (current) localStorage.setItem('cram:study', current); else localStorage.removeItem('cram:study') }, [current])
   useEffect(() => { refreshDue() }, [refreshDue, page])
   // drop a current study that no longer exists (deleted, or stale localStorage)
   useEffect(() => { if (studies.length && current && !studies.some(s => s.id === current)) setCurrent(null) }, [studies, current])
   const setStudy = (sid, upd) => setOpen(o => ({ ...o, [sid]: typeof upd === 'function' ? upd(o[sid]) : upd }))
   const load = async sid => { if (open[sid]) return true; const s = await api.get(`/api/studies/${sid}`).catch(() => ({ error: 'unreachable' })); if (s.error) return false; setStudy(sid, s); return true }
-  const go = p => { setPage(p); if (isPane(p)) setVisited(v => ({ ...v, [p]: true })); else reload() }
+  // every way of opening a page lands here: it focuses that page's tab, or opens one
+  const go = p => { setPage(p); if (p !== 'study') setTabs(ts => ts.some(t => t.page === p) ? ts : [...ts, { page: p }]); if (!isPane(p)) reload() }
   // open any entry; with a real study id, the study's workspace on that tool (General practice sessions stay on the generic pages)
   const openTool = async (sid, tool) => {
-    if (sid && sid !== '_general' && WS_OF[tool] && await load(sid)) { setCurrent(sid); setWsTool(WS_OF[tool]); return go('study') }
+    if (sid && sid !== '_general' && WS_OF[tool] && await load(sid)) {
+      setTabs(ts => ts.some(t => t.sid === sid) ? ts : [...ts, { page: 'study', sid, tool: WS_OF[tool] }])
+      setCurrent(sid); setWsTool(WS_OF[tool]); return go('study')
+    }
     go(ENTRIES.some(e => e[0] === tool) ? tool : WS_OF[tool] ? 'studies' : 'dashboard') // a study tool with no study: pick one from Studies
   }
-  // Ctrl+1…9 and Ctrl+K by physical key, so they also work on an Arabic layout
+  const isOn = t => t.sid ? page === 'study' && current === t.sid : page === t.page
+  const activate = t => { if (!t.sid) return go(t.page); setCurrent(t.sid); setWsTool(t.tool || 'chat'); go('study') }
+  const close = i => { const t = tabs[i], rest = tabs.filter((_, j) => j !== i); if (!rest.length) return; setTabs(rest); if (isOn(t)) activate(rest[Math.min(i, rest.length - 1)]) }
+  useEffect(() => { if (page === 'study') setTabs(ts => ts.map(t => t.sid === current ? { ...t, tool: wsTool } : t)) }, [wsTool, current, page]) // a study tab reopens on the tool you left it on
+  // Ctrl+1…9, Ctrl+K and Ctrl+W (close tab) by physical key, so they also work on an Arabic layout
   const goRef = useRef(go); goRef.current = go
+  const closeRef = useRef(); closeRef.current = () => { const i = tabs.findIndex(isOn); if (i >= 0) close(i) }
   useEffect(() => {
     const k = e => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
       const n = /^Digit([1-9])$/.exec(e.code)?.[1]
       if (n && ENTRIES[n - 1]) { e.preventDefault(); goRef.current(ENTRIES[n - 1][0]) }
       else if (e.code === 'KeyK') { e.preventDefault(); setPalette(p => !p) }
+      else if (e.code === 'KeyW') { e.preventDefault(); closeRef.current() }
     }
     window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k)
   }, [])
@@ -114,7 +127,7 @@ export default function App() {
   const study = current ? open[current] : null
   const wsLabel = WS_TOOLS.find(t => t[0] === wsTool)?.[1]
   const pane = isPane(page)
-  // A detail view is open in a study's workspace, or when Code / Interview / Review filled their header slot (PageBar).
+  // A detail view is open in a study's workspace or Notes (they have their own sidebars), or when Code / Interview / Review filled their header slot (PageBar).
   // Then the sidebar steps aside on every page but the dashboard; the menu button in the header brings it back.
   const [slotFilled, setSlotFilled] = useState({}); const [peek, setPeek] = useState(false)
   useEffect(() => {
@@ -123,7 +136,7 @@ export default function App() {
     const mo = new MutationObserver(sync); els.forEach(([, el]) => mo.observe(el, { childList: true })); sync()
     return () => mo.disconnect()
   }, [page]) // re-find the slots per page: on the very first render they may not be in the DOM yet
-  const detail = page === 'study' || (page !== 'dashboard' && !!slotFilled[page])
+  const detail = page === 'study' || page === 'notes' || (page !== 'dashboard' && !!slotFilled[page])
   useEffect(() => setPeek(false), [page, detail])
   const hideSide = detail && !peek
   const created = async sid => { const then = newStudy?.then; setNewStudy(null); await reload(); openTool(sid, then || 'study') }
@@ -131,9 +144,22 @@ export default function App() {
     <div className="h-screen flex bg-app p-2.5 gap-2.5">
       <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} due={due} onPalette={() => setPalette(true)} hidden={hideSide} />
       <div className="flex-1 min-w-0 flex flex-col island overflow-hidden">
+        <div className="order-last flex items-center gap-1 px-2 pt-1.5 pb-2 border-t border-border bg-app/40 overflow-x-auto flex-shrink-0" role="tablist">{/* order-last: the tabs sit at the bottom of the island */}
+          {tabs.map((t, i) => {
+            const on = isOn(t), e = LABELS.find(x => x[0] === t.page)
+            const [label, ic] = t.sid ? [open[t.sid]?.title || studies.find(s => s.id === t.sid)?.title || 'Study', I.book] : [e?.[1], e?.[2]]
+            return (
+              <div key={t.sid || t.page} role="tab" aria-selected={on} onMouseDown={ev => { if (ev.button === 1) { ev.preventDefault(); close(i) } }}
+                className={`flex items-center gap-1 ps-3 pe-1 h-8 rounded-lg text-xs max-w-[220px] flex-shrink-0 border transition-colors ${on ? 'bg-panel border-border text-white' : 'border-transparent text-dim hover:text-white hover:bg-white/5'}`}>
+                <button onClick={() => activate(t)} className="flex items-center gap-1.5 min-w-0 h-full" dir="auto"><span className={on ? 'text-accent' : ''}><Ico s={13} d={ic} /></span><span className="truncate">{label}</span></button>
+                {tabs.length > 1 ? <button onClick={() => close(i)} title="Close tab (Ctrl+W)" aria-label={`Close ${label}`} className="w-5 h-5 rounded grid place-items-center text-dim hover:text-white hover:bg-white/10 flex-shrink-0"><Ico s={11} d={<><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>} /></button> : <span className="w-1" />}
+              </div>
+            )
+          })}
+        </div>
         {stale && <div className="px-4 py-2 text-xs bg-error/15 text-error border-b border-error/30 flex items-center gap-2"><b>Outdated server.</b><span className="flex-1 truncate">{stale}</span><button onClick={() => setStale('')} className="opacity-70 hover:opacity-100">✕</button></div>}
         {( // always mounted so the per-tool bar slots survive page switches; hidden where no header belongs
-          <div className={`app-bar min-h-11 py-1 flex items-center gap-1 px-3 border-b border-border bg-panel flex-shrink-0 ${pane && page !== 'plan' ? '' : 'hidden'}`}>
+          <div className={`app-bar min-h-11 py-1 flex items-center gap-1 px-3 border-b border-border bg-panel flex-shrink-0 ${pane && page !== 'plan' && page !== 'notes' ? '' : 'hidden'}`}>{/* Notes brings its own NavBar */}
             {detail && <button onClick={() => setPeek(v => !v)} title={peek ? 'Hide menu' : 'Show menu'} aria-label={peek ? 'Hide menu' : 'Show menu'} className="w-7 h-7 rounded-md text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0"><Ico d={<><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></>} /></button>}
             <button onClick={() => go('dashboard')} title="Home" aria-label="Home" className="w-7 h-7 rounded-md text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0"><span className="block -translate-y-px" aria-hidden><Ico d={<><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></>} /></span></button>{/* lifted 1px: a house reads low next to text */}
             <Crumb.Sep />
@@ -161,11 +187,11 @@ export default function App() {
         <div className="flex-1 min-h-0 relative">
           <div className={`absolute inset-0 ${pane ? 'hidden' : ''}`}>
             <HomeScreen section={HOME.includes(page) ? page : 'dashboard'} studies={studies} settings={settings} profile={profile} onEditProfile={() => setEditProfile(true)}
-              onOpen={(sid, tool) => openTool(sid, tool || 'study')} onOpenTool={openTool} onNew={(mode, prefill) => setNewStudy({ mode: mode || 'subject', prefill })} onDeleted={sid => { if (sid === current) setCurrent(null); setOpen(o => { const c = { ...o }; delete c[sid]; return c }); reload() }} />
+              onOpen={(sid, tool) => openTool(sid, tool || 'study')} onOpenTool={openTool} onNew={(mode, prefill) => setNewStudy({ mode: mode || 'subject', prefill })} onDeleted={sid => { if (sid === current) setCurrent(null); setTabs(ts => ts.filter(t => t.sid !== sid)); setOpen(o => { const c = { ...o }; delete c[sid]; return c }); reload() }} />
           </div>
           {page === 'study' && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">{current ? 'Loading…' : 'Pick a study from Studies.'}</div>}
-          {Object.entries(GLOBAL).map(([t, Tool]) => (visited[t] || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} /></div>)}
-          {(visited.notes || page === 'notes') && <div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} onHome={() => go('dashboard')} /></div>}
+          {Object.entries(GLOBAL).map(([t, Tool]) => (tabs.some(x => x.page === t) || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} /></div>)}
+          {(tabs.some(x => x.page === 'notes') || page === 'notes') &&<div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} onHome={() => go('dashboard')} /></div>}
           {page === 'settings' && <div className="absolute inset-0"><SettingsModal settings={settings} onChange={loadSettings} /></div>}
           {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} /></div>}
         </div>

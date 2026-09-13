@@ -56,10 +56,12 @@ const CSS = `
   h2 + h3 { margin-top: 10px; }
   p { margin: 9px 0; }
   strong { color: #111827; font-weight: 600; }
-  ul, ol { padding-left: 20px; margin: 9px 0; }
+  ul, ol { padding-inline-start: 20px; margin: 9px 0; }
+  :is(ul, ol)[style*="text-align"] { list-style-position: inside; }
+  :is(ul, ol)[style*="text-align"] > li > p:first-child { display: inline; }
   li { margin: 4px 0; }
   li::marker { color: #c2451f; }
-  blockquote { border-left: 2px solid #dcdfe4; padding-left: 14px; margin: 14px 0; color: #4b5563; font-style: italic; }
+  blockquote { border-inline-start: 2px solid #dcdfe4; padding-inline-start: 14px; margin: 14px 0; color: #4b5563; font-style: italic; }
   hr { border: 0; border-top: 1px solid #dcdfe4; margin: 24px 0; }
 
   /* A coloured label opening a paragraph is a callout; the tint comes from its own colour. */
