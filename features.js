@@ -169,6 +169,64 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ---------- job prep: match a CV to a job description, research the company's interviews, build a practice plan ----------
+  const PREP = file('prep.json'), loadPrep = () => readJson(PREP, []);
+  const { verify } = require('./linkcheck');
+  const PREP_ROUNDS = ['technical', 'behavioral', 'situational', 'management', 'system-design', 'architecture'];
+  app.get('/api/prep', (req, res) => res.json(loadPrep().map(({ cv, ...p }) => p)));
+  app.delete('/api/prep/:pid', (req, res) => { fs.writeFileSync(PREP, JSON.stringify(loadPrep().filter(p => p.id !== req.params.pid))); res.json({ ok: true }); });
+  // a CV picked as a PDF becomes text with pdftotext (poppler)
+  app.post('/api/prep/cv-text', (req, res) => {
+    const f = String(req.body?.path || '');
+    if (!/\.pdf$/i.test(f) || !fs.existsSync(f)) return res.status(400).json({ error: 'Pick a PDF file.' });
+    execFile('pdftotext', ['-layout', f, '-'], { maxBuffer: 8e6, timeout: 30000 }, (e, out) => e ? res.status(500).json({ error: e.code === 'ENOENT' ? 'pdftotext is not installed (poppler-utils).' : e.message }) : res.json({ text: out.slice(0, 15000) }));
+  });
+  app.post('/api/prep', async (req, res) => {
+    const b = req.body || {}, clip = (v, n) => String(v || '').trim().slice(0, n);
+    const p = { id: Date.now().toString(36), at: Date.now(), role: clip(b.role, 80), seniority: clip(b.seniority, 20) || 'mid', company: clip(b.company, 80), language: /arab/i.test(b.language) ? 'Arabic' : 'English', jd: clip(b.jd, 8000), cv: clip(b.cv, 15000) };
+    if (!p.jd && !p.cv) return res.status(400).json({ error: 'Paste a job description, your CV, or both.' });
+    const ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+    const g = study('_general'), lang = p.language === 'Arabic' ? 'Write every text field in Egyptian colloquial Arabic, keeping technical terms in English.' : 'Write every text field in English.';
+    try {
+      if (p.company) {
+        const r = await json(g, `Use web search to research how ${p.company} interviews candidates for "${p.role || 'this kind of'}" roles: the stages of the process, what they are known to value, and questions candidates report being asked. Copy every URL exactly from a search result; never guess one. ${lang} Respond with ONLY JSON: {"process": [short strings, one per stage], "values": [short strings], "questions": [5-10 strings], "sources": [2-6 of {"title": string, "url": string}]}`, undefined, { web: true, signal: ac.signal });
+        p.research = { process: (r.process || []).map(String).slice(0, 8), values: (r.values || []).map(String).slice(0, 8), questions: (r.questions || []).map(String).slice(0, 10),
+          sources: (await verify((r.sources || []).map(x => ({ ...x, kind: 'article' })), {})).map(x => ({ title: x.title, url: x.url })) };
+      }
+      const r = await json(g, `You prepare a candidate for a job interview. ${lang}
+Role: ${p.role || '(infer it from the job description)'}, ${p.seniority} level${p.company ? `, at ${p.company}` : ''}.
+Job description:
+<jd>
+${p.jd || '(not given)'}
+</jd>
+Candidate CV:
+<cv>
+${p.cv || '(not given)'}
+</cv>
+${p.research ? `What is known about ${p.company}'s interviews: ${JSON.stringify({ process: p.research.process, values: p.research.values, questions: p.research.questions })}\n` : ''}Compare the CV with the job honestly. Then build a practice plan with the tools that exist: mock interview rounds (${PREP_ROUNDS.join(', ')}), coding challenges on a topic, and flashcards.
+Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 sentences)}, "strengths": [2-5 strings], "gaps": [2-6 of {"skill": string, "why": string, "how": string (a concrete way to close it)}], "rounds": [2-4 of {"round": one of the round ids above, "focus": string}], "codingTopics": [0-4 short strings, only if the role writes code], "likelyQuestions": [5-8 strings], "flashcards": [6-10 of {"q": string, "a": string}]}`, undefined, { signal: ac.signal });
+      p.plan = {
+        fit: { score: Math.max(0, Math.min(100, Math.round(+r.fit?.score || 0))), summary: String(r.fit?.summary || '') },
+        strengths: (r.strengths || []).map(String).slice(0, 5),
+        gaps: (r.gaps || []).filter(x => x?.skill).map(x => ({ skill: String(x.skill), why: String(x.why || ''), how: String(x.how || '') })).slice(0, 6),
+        rounds: (r.rounds || []).filter(x => PREP_ROUNDS.includes(x?.round)).map(x => ({ round: x.round, focus: String(x.focus || '') })).slice(0, 4),
+        codingTopics: (r.codingTopics || []).map(String).slice(0, 4), likelyQuestions: (r.likelyQuestions || []).map(String).slice(0, 8),
+        flashcards: (r.flashcards || []).filter(c => c?.q && c?.a).map(c => ({ q: String(c.q), a: String(c.a) })).slice(0, 12),
+      };
+      if (ac.signal.aborted) return;
+      const list = loadPrep(); list.unshift(p); fs.writeFileSync(PREP, JSON.stringify(list.slice(0, 30)));
+      const { cv, ...out } = p; res.json(out);
+    } catch (e) { if (!ac.signal.aborted) res.status(500).json({ error: e instanceof SyntaxError ? 'The reply came back garbled. Try again.' : e.message }); }
+  });
+  // the plan's flashcards join the review queue as General practice cards
+  app.post('/api/prep/:pid/cards', (req, res) => {
+    const list = loadPrep(), p = list.find(x => x.id === req.params.pid); if (!p?.plan) return res.status(404).json({ error: 'no such plan' });
+    if (p.cardsAdded) return res.json({ added: 0, already: true });
+    const now = Date.now(), rv = loadReview();
+    const added = p.plan.flashcards.map((c, i) => ({ id: `prep-${p.id}-${i}`, key: `prep:${p.id}:${i}`, studyId: '_general', source: 'card', q: c.q, a: c.a, choices: null, answerIndex: null, step: -1, reps: 0, lapses: 0, createdAt: now, dueAt: now }));
+    rv.cards.push(...added); write('review.json', rv); p.cardsAdded = now; fs.writeFileSync(PREP, JSON.stringify(list)); res.json({ added: added.length });
+  });
+
   // ---------- read aloud: Microsoft Edge neural voices (online, human-like), espeak through speech-dispatcher when offline ----------
   // ponytail: msedge-tts uses Edge's unofficial read-aloud endpoint; if Microsoft changes it, the espeak fallback keeps working
   const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
@@ -247,6 +305,14 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
       const s2 = cfg(); s2.elevenVoices = { ...(s2.elevenVoices || {}), [lang]: { id: voiceId, name: String(name || '').slice(0, 60) } };
       fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s2)); res.json({ ok: true, selected: voiceId });
     } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+  // characters used on each key this month
+  app.get('/api/eleven/usage', async (req, res) => {
+    const s = cfg(), keys = [['main', s.elevenKey], ['backup', s.elevenKey2]].filter(k => k[1]);
+    res.json(await Promise.all(keys.map(async ([name, key]) => {
+      try { const o = await (await el('/user/subscription', key)).json(); return { name, tier: o.tier, used: o.character_count, limit: o.character_limit, resetAt: (o.next_character_count_reset_unix || 0) * 1000 }; }
+      catch (e) { return { name, error: e.message }; }
+    })));
   });
   const model = s => s.elevenModel || 'eleven_multilingual_v2';
   // hear any usable voice say a line of Egyptian interview talk before choosing it (cached, so a second listen is free)
@@ -335,7 +401,7 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
     if (!req.body?.length) return res.status(400).json({ error: 'no audio' });
     const f = path.join(os.tmpdir(), `cram-answer-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
     fs.writeFileSync(f, req.body);
-    try { const t0 = Date.now(), r = await worker().ask(f, req.query.lang === 'ar' ? 'ar' : 'en'); if (r.error) return res.status(500).json({ error: r.error }); console.log(`[stt] ${req.query.lang} ${req.body.length >> 10}KB in ${Date.now() - t0}ms`); res.json({ text: r.text }); }
+    try { const t0 = Date.now(), r = await worker().ask(f, { ar: 'ar', en: 'en' }[req.query.lang] || null); if (r.error) return res.status(500).json({ error: r.error }); console.log(`[stt] ${req.query.lang} ${req.body.length >> 10}KB in ${Date.now() - t0}ms`); res.json({ text: r.text }); }
     finally { fs.rmSync(f, { force: true }); }
   });
 

@@ -5,6 +5,7 @@ import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
 import { Centered, useSessions, GENERAL, PageBar, Grid, Tile, Stats } from '../components/SessionList.jsx'
 import { speak, stopSpeech, speechProgress, useMic, dirOf } from '../voice.js'
+import { JobPrep, StoryBank } from './Prep.jsx'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const MIC = <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>
@@ -30,15 +31,20 @@ const ROUNDS = [
 const roundName = id => ROUNDS.find(r => r[0] === id)?.[1] || id
 const SENIORITY = ['junior', 'mid', 'senior', 'lead']
 const real = iv => iv.mode === 'real'
+const PERSONA_OPTS = ['friendly', 'neutral', 'tough']
+// "give me a second" style utterances: the mic keeps listening instead of counting down to send
+const THINK = /^(ثانية|ثانيه|ثواني|لحظة|لحظه|استنى|استني|خليني ?(أفكر|افكر)|دقيقة|دقيقه|let me think|give me a (sec|second|moment|minute)|one (sec|second|moment)|hold on|hmm+|umm*)[\s.!?؟،,]*$/i
+const FILLERS = /(^|[\s،,.])(يعني|امم+|آآ+|um+|uh+|you know|basically)(?=$|[\s،,.])/gi
+const VERDICT = { strong_hire: ['Strong hire', 'badge-green'], hire: ['Hire', 'badge-green'], lean_hire: ['Leaning hire', 'badge-blue'], lean_no_hire: ['Leaning no hire', 'badge-yellow'], no_hire: ['No hire', 'badge-red'] }
 
 // ---------- generic hero: a real interview round for a target role ----------
-function RealHero({ busy, onStart, onCoding }) {
+function RealHero({ busy, onStart, onCoding, onPrep, onStories }) {
   const saved = (() => { try { return JSON.parse(localStorage.getItem('cram:iv-setup') || '{}') } catch { return {} } })()
   const [role, setRole] = useState(saved.role || ''); const [sen, setSen] = useState(saved.seniority || 'mid'); const [round, setRound] = useState(saved.round || 'technical')
-  const [lang, setLang] = useState(saved.language || 'English'); const [jd, setJd] = useState(''); const [showJd, setShowJd] = useState(false)
+  const [lang, setLang] = useState(saved.language || 'English'); const [jd, setJd] = useState(''); const [showJd, setShowJd] = useState(false); const [persona, setPersona] = useState(saved.persona || 'neutral')
   const go = () => {
     if (round === 'coding') return onCoding?.()
-    const o = { role: role.trim(), seniority: sen, round, language: lang }
+    const o = { role: role.trim(), seniority: sen, round, language: lang, persona }
     try { localStorage.setItem('cram:iv-setup', JSON.stringify(o)) } catch {}
     onStart({ ...o, jd })
   }
@@ -48,6 +54,7 @@ function RealHero({ busy, onStart, onCoding }) {
       <div className="relative flex items-center gap-4">
         <div className="w-12 h-12 rounded-2xl bg-accent/15 text-accent grid place-items-center flex-shrink-0" style={{ animation: 'iv-bob 3s ease-in-out infinite' }}><Ico s={22} d={MIC} /></div>
         <div><h2 className="text-xl font-semibold text-white">Mock interview</h2><p className="text-sm text-dim mt-0.5">A real round with a calibrated interviewer: open answers, follow-ups when you are vague, and rubric scores after every answer.</p></div>
+        {onPrep && <div className="ms-auto flex gap-1.5 flex-shrink-0 self-start"><button onClick={onPrep} className="btn-tint text-xs">Job prep</button><button onClick={onStories} className="btn-tint text-xs">Story bank</button></div>}
       </div>
       <div className="relative grid gap-3 sm:grid-cols-[1fr_auto] items-end">
         <label className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Role</span><input className="input" placeholder="e.g. Backend engineer, Product manager" value={role} onChange={e => setRole(e.target.value)} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} autoFocus /></label>
@@ -65,6 +72,7 @@ function RealHero({ busy, onStart, onCoding }) {
       </div>
       <div className="relative flex items-center gap-2 flex-wrap">
         <Pills value={lang} onChange={setLang} options={LANGS} />
+        <span title="How the interviewer treats you"><Pills value={persona} onChange={setPersona} options={PERSONA_OPTS} /></span>
         <button onClick={() => setShowJd(v => !v)} className={`btn-tint ${showJd || jd ? 'btn-purple' : ''}`}><Ico d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></>} />{jd ? 'Job description added' : 'Add job description'}</button>
       </div>
       {showJd && <textarea dir="auto" className="relative input min-h-[120px] resize-y" placeholder="Paste the job posting (optional). Questions get tailored to it." value={jd} onChange={e => setJd(e.target.value.slice(0, 6000))} />}
@@ -128,16 +136,57 @@ function Card({ iv, onOpen, onDelete }) {
 }
 
 // ---------- one past turn, as shown in the transcript ----------
-function Turn({ t, i }) {
+const spokeLine = d => d && `Spoken · ${d.wpm} words/min · ${d.fillers} filler word${d.fillers === 1 ? '' : 's'} · ${d.longPauses} long pause${d.longPauses === 1 ? '' : 's'}`
+function Turn({ t, i, iv, base, setIv }) {
   return (
     <div id={`iv-t-${i}`} className="rounded-lg bg-app border border-border p-3 flex flex-col gap-2 scroll-mt-4" dir="auto">
-      <div className="flex items-center gap-2 text-xs"><span className={`w-2 h-2 rounded-full ${t.correct ? 'bg-success' : 'bg-error'}`} /><span className="text-dim">Q{i + 1} · {t.rubric || t.topic ? <>{t.followUp && 'follow-up · '}{t.topic || 'open answer'}</> : t.type === 'choice' ? 'multiple choice' : 'open answer'} · {fmt(t.secs || 0)}</span><b className={`ml-auto ${t.correct ? 'text-success' : 'text-error'}`}>{t.score}/10</b></div>
+      <div className="flex items-center gap-2 text-xs"><span className={`w-2 h-2 rounded-full ${t.correct ? 'bg-success' : 'bg-error'}`} /><span className="text-dim">Q{i + 1} · {t.rubric || t.topic ? <>{t.followUp && 'follow-up · '}{t.topic || 'open answer'}</> : t.type === 'choice' ? 'multiple choice' : 'open answer'} · {fmt(t.secs || 0)}{t.hint ? ' · hint used' : ''}</span><b className={`ml-auto ${t.correct ? 'text-success' : 'text-error'}`}>{t.score}/10</b></div>
       <div dir={dirOf(t.q)} className="text-sm font-medium text-gray-100">{t.q}</div>
       {t.type === 'choice' && t.choices ? (
         <div className="flex flex-col gap-1">{t.choices.map((c, j) => <div key={j} className={`text-xs px-2.5 py-1.5 rounded-md border flex gap-2 ${j === t.answerIndex ? 'border-success bg-success/10' : j === t.picked ? 'border-error bg-error/10' : 'border-border'}`}><span className="text-dim font-mono">{'ABCD'[j]}</span><span>{c}</span>{j === t.picked && <span className="ml-auto text-[10px] text-dim">your pick</span>}</div>)}</div>
-      ) : <div className="text-sm px-3 py-2 rounded-lg bg-accent/10 border border-accent/25 whitespace-pre-wrap">{t.answer || <i className="text-dim">no answer</i>}</div>}
+      ) : <div dir={dirOf(t.answer)} className="text-sm px-3 py-2 rounded-lg bg-accent/10 border border-accent/25 whitespace-pre-wrap">{t.answer || <i className="text-dim">no answer</i>}</div>}
+      {t.delivery && <div className="text-[11px] text-dim">{spokeLine(t.delivery)}</div>}
       {t.rubric && <Rubric r={t.rubric} />}
-      {t.feedback && <div className="text-xs text-gray-300 border-l-2 border-accent pl-2.5 kb-rich"><Markdown text={t.feedback} /></div>}
+      {t.feedback && <div dir={dirOf(t.feedback)} className="text-xs text-gray-300 border-l-2 border-accent pl-2.5 kb-rich"><Markdown text={t.feedback} /></div>}
+      {base && <TurnTools iv={iv} t={t} i={i} base={base} setIv={setIv} />}
+    </div>
+  )
+}
+// after the interview: hear how a strong candidate would answer, then answer the same question again and compare
+function TurnTools({ iv, t, i, base, setIv }) {
+  const [busy, setBusy] = useState(''); const [err, setErr] = useState(''); const [retry, setRetry] = useState(false); const [text, setText] = useState(''); const [voice, setVoice] = useState(null)
+  const mic = useMic({ lang: iv.language, onText: x => setText(d => (d ? `${d} ${x}` : x)), onError: setErr })
+  const call = async (what, body) => { setBusy(what); setErr(''); const r = await api.post(`${base}/turns/${i}/${what}`, body || {}); setBusy(''); if (r.error) { setErr(r.error); return null } setIv(r); return r }
+  const sendRetry = async () => { mic.stop(); if (await call('retry', { answer: text })) { setText(''); setRetry(false) } }
+  const play = async () => { if (voice) return stopSpeech(); setVoice('loading'); await speak(t.model, iv.language, () => setVoice('playing')); setVoice(null) }
+  useEffect(() => () => { if (voice) stopSpeech() }, []) // eslint-disable-line
+  return (
+    <div className="flex flex-col gap-2 pt-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        {!t.model && <button disabled={!!busy} onClick={() => call('model')} className="btn-tint text-[11px]">{busy === 'model' ? <><Spin />Writing…</> : 'Show a strong answer'}</button>}
+        {!retry && <button onClick={() => setRetry(true)} className="btn-tint text-[11px]">Answer again</button>}
+        {err && <span className="text-[11px] text-error">{err}</span>}
+      </div>
+      {t.model && <div className="rounded-lg border border-success/30 bg-success/5 p-3 flex flex-col gap-1.5">
+        <div className="flex items-center gap-2 text-[11px]"><span className="text-success font-semibold">A strong answer</span>
+          <button onClick={play} className="ms-auto text-dim hover:text-white inline-flex items-center gap-1">{voice === 'loading' ? <><Spin />Loading voice…</> : voice === 'playing' ? 'Stop' : <><Ico s={11} d={SPEAK} />Play</>}</button></div>
+        <div dir={dirOf(t.model)} className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{t.model}</div>
+      </div>}
+      {retry && <div className="flex flex-col gap-1.5">
+        <div className="flex items-end gap-2">
+          <button onClick={() => (mic.on ? mic.stop() : mic.start())} title={mic.on ? 'Stop the mic' : 'Answer by voice'} className={`w-9 h-9 rounded-full grid place-items-center flex-shrink-0 ${mic.on ? 'bg-accent text-app' : 'bg-panel border border-border text-dim hover:text-white'}`}>{mic.state === 'loading' || mic.state === 'transcribing' ? <Spin /> : <Ico s={15} d={MIC} />}</button>
+          <textarea dir="auto" rows={4} className="input flex-1 resize-y text-sm" placeholder="Your better answer…" value={text} onChange={e => setText(e.target.value)} />
+        </div>
+        <div className="flex gap-2"><button disabled={!!busy || !text.trim()} onClick={sendRetry} className="btn btn-primary text-xs">{busy === 'retry' ? <><Spin />Grading…</> : 'Grade it'}</button><button onClick={() => { mic.stop(); setRetry(false) }} className="btn-ghost text-xs">Cancel</button></div>
+      </div>}
+      {t.retries?.map((r, k) => (
+        <details key={k} className="rounded-lg border border-border bg-panel/40 px-3 py-2">
+          <summary className="text-[11px] cursor-pointer flex items-center gap-2"><span className="text-dim">Try {k + 2}</span><b className={`font-mono ${tone(r.score)}`}>{r.score}/10</b>
+            <span className={r.score > t.score ? 'text-success' : r.score < t.score ? 'text-error' : 'text-dim'}>{r.score > t.score ? `+${r.score - t.score}` : r.score - t.score || '±0'} vs your first answer</span></summary>
+          <div dir={dirOf(r.answer)} className="text-sm text-gray-300 whitespace-pre-wrap mt-2">{r.answer}</div>
+          {r.rubric && <div className="mt-2"><Rubric r={r.rubric} /></div>}
+          <div dir={dirOf(r.feedback)} className="text-xs text-gray-400 border-l-2 border-accent pl-2.5 kb-rich mt-2"><Markdown text={r.feedback} /></div>
+        </details>))}
     </div>
   )
 }
@@ -193,6 +242,21 @@ function Statistics({ iv }) {
         </>}
         <Stat label="Trend" value={st.n >= 4 ? `${st.trend >= 0 ? '+' : ''}${st.trend.toFixed(1)}` : '–'} sub={st.n >= 4 ? (st.trend > 0.5 ? 'improving as you went' : st.trend < -0.5 ? 'dropped off later' : 'steady') : 'needs 4+ answers'} cls={st.n >= 4 ? (st.trend > 0.5 ? 'text-success' : st.trend < -0.5 ? 'text-error' : 'text-white') : 'text-white'} />
       </div>
+      {iv.turns.some(t => t.delivery) && (() => {
+        const D = iv.turns.filter(t => t.delivery).map(t => t.delivery), avg = k => Math.round(D.reduce((a, d) => a + d[k], 0) / D.length)
+        const pace = avg('wpm'), okPace = pace >= 110 && pace <= 170
+        return (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-dim mb-2">How you spoke · {D.length} spoken answer{D.length === 1 ? '' : 's'}</div>
+            <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))' }}>
+              <Stat label="Pace" value={pace} sub={okPace ? 'words/min, a clear pace' : pace < 110 ? 'words/min, a bit slow' : 'words/min, a bit fast'} cls={okPace ? 'text-success' : 'text-warning'} />
+              <Stat label="Filler words" value={(D.reduce((a, d) => a + d.fillers, 0) / D.length).toFixed(1)} sub="per answer (يعني, um…)" cls={avg('fillers') <= 2 ? 'text-white' : 'text-warning'} />
+              <Stat label="Long pauses" value={D.reduce((a, d) => a + d.longPauses, 0)} sub="over 2.5 seconds, in total" />
+              <Stat label="Speaking time" value={fmt(avg('secs'))} sub="per answer" />
+            </div>
+          </div>
+        )
+      })()}
       {st.rubric.length > 0 && (
         <div>
           <div className="text-[10px] uppercase tracking-wider text-dim mb-2">Rubric · average per criterion</div>
@@ -315,14 +379,37 @@ function Coaching({ rep, url, onReport, stale = '', intro = 'Tips on how to impr
     </>
   )
 }
+// the hiring panel's call on an ended mock interview, made once per set of answers
+function Verdict({ iv, base, setIv }) {
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
+  const v = iv.verdict, stale = v && v.turns !== iv.turns.length
+  const run = async () => { setBusy(true); setErr(''); const r = await api.post(`${base}/verdict`, {}); setBusy(false); if (r.error) setErr(r.error); else setIv(r) }
+  useEffect(() => { if (!v && !busy) run() }, [iv.id]) // eslint-disable-line
+  if (busy) return <div className="island p-5 flex items-center gap-3 text-sm text-dim flex-shrink-0"><Spin />The hiring panel is deciding…</div>
+  if (!v) return err ? <div className="island p-5 text-sm text-error flex items-center gap-3 flex-shrink-0">{err}<button onClick={run} className="btn-tint ms-auto">Try again</button></div> : null
+  const [label, badge] = VERDICT[v.verdict] || VERDICT.lean_no_hire
+  return (
+    <div className="island p-5 flex flex-col gap-3 flex-shrink-0" style={{ animation: 'iv-in .3s ease-out both' }}>
+      <div className="flex items-center gap-3 flex-wrap"><span className="text-[10px] uppercase tracking-wider text-dim">Hiring decision</span><span className={`badge ${badge} text-sm px-3 py-1`}>{label}</span>
+        {stale && <span className="text-[11px] text-warning">Made after {v.turns} answers</span>}
+        <button onClick={run} className="ms-auto btn-ghost text-xs">{stale ? 'Decide again' : 'Refresh'}</button></div>
+      <p dir={dirOf(v.summary)} className="text-sm text-gray-200 leading-relaxed">{v.summary}</p>
+      <div className="grid gap-2.5 md:grid-cols-2">
+        <div className="rounded-xl bg-app border border-border p-3"><div className="text-xs font-semibold text-white mb-1.5">Why</div><ul className="flex flex-col gap-1">{v.reasons.map((x, i) => <li key={i} dir={dirOf(x)} className="text-sm text-gray-300 flex gap-2"><span className="text-dim">•</span>{x}</li>)}</ul></div>
+        <div className="rounded-xl bg-app border border-border p-3"><div className="text-xs font-semibold text-accent mb-1.5">To get a yes next time</div><ul className="flex flex-col gap-1">{v.toPass.map((x, i) => <li key={i} dir={dirOf(x)} className="text-sm text-gray-300 flex gap-2"><span className="text-dim">•</span>{x}</li>)}</ul></div>
+      </div>
+    </div>
+  )
+}
 function Details({ iv, base, setIv }) {
   return (
     <>
+      {real(iv) && <Verdict iv={iv} base={base} setIv={setIv} />}
       <Statistics iv={iv} />
       <Coaching rep={iv.report} url={`${base}/report`} onReport={setIv} stale={iv.report && iv.report.turns !== iv.turns.length ? `Made after ${iv.report.turns} answers. You have ${iv.turns.length} now.` : ''} />
       <div className="island flex-shrink-0">
         <div className="panel-header">Transcript · {iv.turns.length} question{iv.turns.length === 1 ? '' : 's'}</div>
-        <div className="p-2.5 flex flex-col gap-2">{iv.turns.map((t, i) => <Turn key={i} t={t} i={i} />)}</div>
+        <div className="p-2.5 flex flex-col gap-2">{iv.turns.map((t, i) => <Turn key={i} t={t} i={i} iv={iv} base={base} setIv={setIv} />)}</div>
       </div>
     </>
   )
@@ -403,6 +490,7 @@ function AnswerBubble({ t }) {
   )
 }
 const MIC_LABEL = { loading: 'Starting the mic…', listening: 'Listening…', speaking: 'Hearing you…', transcribing: 'Writing it down…' }
+const HintBubble = ({ text }) => <div className="max-w-[85%] ps-[42px]" style={{ animation: 'iv-in .25s ease-out both' }}><div dir={dirOf(text)} className="rounded-xl bg-warning/10 border border-warning/30 px-3 py-2 text-sm text-gray-200"><span className="text-[10px] uppercase tracking-wider text-warning me-2">Hint</span>{text}</div></div>
 
 function Session({ study, iv, setIv, onBack, bar }) {
   const [draft, setDraft] = useState(''); const [busy, setBusy] = useState(false); const [preparing, setPreparing] = useState(false)
@@ -411,6 +499,9 @@ function Session({ study, iv, setIv, onBack, bar }) {
   const [shown, setShown] = useState(null) // { q, n }: how much of the pending question is on screen
   const [speaking, setSpeaking] = useState(null) // { key, phase: 'loading' | 'playing' }
   const [sendIn, setSendIn] = useState(0); const manual = useRef(false) // voice answers send themselves after a quiet moment, unless you start typing
+  const [bargeIn, setBargeIn] = useState(() => localStorage.getItem('cram:barge-in') !== '0') // talk over the interviewer to cut in
+  const [hold, setHold] = useState(0); const [hinting, setHinting] = useState(false); const barged = useRef(false)
+  const talk = useRef({ secs: 0, pauses: 0, lastEnd: 0 }) // how this answer was spoken: seconds of speech and long pauses between utterances
   const nextReq = useRef(null); const end = useRef(); const box = useRef()
   const base = `/api/studies/${study.id}/interviews/${iv.id}`; const open = iv.status === 'open'; const { n, ok, avg } = stats(iv); const q = iv.pending
   useEffect(() => { if (!open) return; const t = setInterval(() => { if (!document.hidden) setElapsed(e => e + 1) }, 1000); return () => clearInterval(t) }, [open])
@@ -420,10 +511,17 @@ function Session({ study, iv, setIv, onBack, bar }) {
 
   const mic = useMic({
     lang: iv.language,
-    onText: t => { setDraft(d => (d ? `${d} ${t}` : t)); setErr('') },
-    onSpeechStart: () => { setSendIn(0); if (speaking) stopSpeech() },
+    onText: (t, info) => {
+      if (THINK.test(t.trim()) && t.trim().split(/\s+/).length <= 6) return setHold(Date.now() + 20000) // "give me a second": wait, don't write it down
+      const k = talk.current
+      if (info) { if (k.lastEnd && info.endAt - info.secs * 1000 - k.lastEnd > 2500) k.pauses++; k.secs += info.secs; k.lastEnd = info.endAt }
+      setHold(0); setDraft(d => (d ? `${d} ${t}` : t)); setErr('')
+    },
+    onSpeechStart: () => setSendIn(0),
+    onSpeechRealStart: () => { if (speaking && bargeIn) { barged.current = true; stopSpeech() } }, // real speech, not a cough: the interviewer stops talking
     onError: setErr,
   })
+  const micRef = useRef(); micRef.current = mic
   // say a message aloud and follow it with the text; resolves when it has been said
   const say = async (key, text, onReveal) => {
     setSpeaking({ key, phase: 'loading' })
@@ -438,17 +536,18 @@ function Session({ study, iv, setIv, onBack, bar }) {
   // a new question: speak it while the text streams in, then open the mic
   useEffect(() => {
     if (!open || !q || preparing) return
-    let live = true; manual.current = false; setDraft(''); setSendIn(0)
+    let live = true; manual.current = false; setDraft(''); setSendIn(0); setHold(0); barged.current = false; talk.current = { secs: 0, pauses: 0, lastEnd: 0 }
     const reveal = k => live && setShown({ q: q.q, n: k })
     const spoken = [q.q, ...(q.choices || []).map((c, j) => `${'ABCD'[j]}. ${c}`)].join('. ')
     ;(async () => {
       reveal(0)
+      if (voice && bargeIn && !q.choices && !micRef.current.on) micRef.current.start() // listen while the question is read, so you can cut in
       const r = voice ? await say('q', spoken, k => reveal(Math.min(q.q.length, k))) : null
       if (!live) return
-      if (r !== 'played') await typeOut(q.q, reveal) // voice off, stopped or unavailable: stream the text on its own
+      if (r !== 'played') { if (barged.current) reveal(q.q.length); else await typeOut(q.q, reveal) } // voice off, stopped or unavailable: stream the text on its own
       if (!live) return
       reveal(q.q.length); setQStart(ref.current.elapsed)
-      if (voice && !q.choices) mic.start()
+      if (voice && !q.choices && !micRef.current.on) micRef.current.start()
     })()
     return () => { live = false }
   }, [q?.q, preparing, open]) // eslint-disable-line
@@ -459,7 +558,9 @@ function Session({ study, iv, setIv, onBack, bar }) {
     if (busy || !q) return
     if (!answer && !await ask({ title: 'Submit without an answer?', body: 'It will be graded as a blank answer.', ok: 'Submit anyway', danger: false })) return
     mic.stop(); stopSpeech(); setSendIn(0); setBusy(true); setErr('')
-    const r = await api.post(`${base}/answer`, { answer, picked, secs: elapsed - qStart, elapsed })
+    const k = talk.current, words = answer.split(/\s+/).filter(Boolean).length
+    const delivery = k.secs >= 2 && picked == null ? { secs: k.secs, words, wpm: words / (k.secs / 60), fillers: (answer.match(FILLERS) || []).length, longPauses: k.pauses } : null
+    const r = await api.post(`${base}/answer`, { answer, picked, secs: elapsed - qStart, elapsed, delivery })
     setBusy(false)
     if (r.error) { setErr(r.error); return }
     setDraft(''); setIv({ ...r, elapsed })
@@ -475,19 +576,27 @@ function Session({ study, iv, setIv, onBack, bar }) {
   useEffect(() => { if (open && !iv.pending && !preparing) next() }, [open]) // eslint-disable-line
   // voice answers: once there is a real answer (a few words), 5 quiet seconds send it; talking again cancels, so thinking pauses are safe
   useEffect(() => {
+    if (hold > Date.now()) { setSendIn(0); const t = setTimeout(() => setHold(0), hold - Date.now()); return () => clearTimeout(t) } // thinking time
     if (!voice || manual.current || draft.trim().split(/\s+/).length < 3 || busy || mic.state !== 'listening') return setSendIn(0)
     let left = 5; setSendIn(left)
     const t = setInterval(() => { left--; setSendIn(left); if (left <= 0) { clearInterval(t); submit(ref.current.draft.trim()) } }, 1000)
     return () => clearInterval(t)
-  }, [draft, mic.state, voice, busy]) // eslint-disable-line
+  }, [draft, mic.state, voice, busy, hold]) // eslint-disable-line
   useEffect(() => { end.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) }, [n, shown?.n, preparing, busy, draft])
 
   const setStatus = status => { api.post(base, { status, elapsed }); setIv({ ...iv, status, elapsed }) }
   const finish = async () => { if (await ask({ title: 'End this interview?', body: 'You can resume it any time from the list. Your answers and score are kept.', ok: 'End interview' })) { mic.stop(); stopSpeech(); setStatus('ended') } }
   const toggleVoice = () => { const v = !voice; setVoice(v); localStorage.setItem('cram:voice-interview', v ? '1' : '0'); if (!v) { stopSpeech(); mic.stop() } else fetch('/api/transcribe').catch(() => {}) }
   useEffect(() => { if (voice && open) fetch('/api/transcribe').catch(() => {}) }, []) // eslint-disable-line -- warm the recognizer up
+  const toggleBarge = () => { const v = !bargeIn; setBargeIn(v); localStorage.setItem('cram:barge-in', v ? '1' : '0') }
+  const getHint = async () => {
+    setHinting(true); setErr(''); const r = await api.post(`${base}/hint`, {}); setHinting(false)
+    if (r.error) return setErr(r.error)
+    setIv({ ...r, elapsed: ref.current.elapsed })
+    if (voice && r.pending?.hint) { mic.stop(); await say('hint', r.pending.hint); if (!q.choices) micRef.current.start() }
+  }
   const replay = (key, text) => speaking?.key === key ? stopSpeech() : (mic.stop(), say(key, text))
-  const tagOf = t => (t.followUp || t.topic) && <div className="text-[11px] text-dim">{t.followUp && <span className="badge-purple py-0 me-1.5">follow-up</span>}{t.topic}</div>
+  const tagOf = t => (t.followUp || t.topic || t.hint) && <div className="text-[11px] text-dim">{t.followUp && <span className="badge-purple py-0 me-1.5">follow-up</span>}{t.hint && t !== q && <span className="badge-yellow py-0 me-1.5">hint used</span>}{t.topic}</div>
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -502,6 +611,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
         </div>
         {open && <button onClick={toggleVoice} className={`btn-tint ${voice ? 'btn-purple' : ''}`} title="The interviewer speaks each question and the mic opens for your answer">
           {speaking?.phase === 'loading' ? <Spin /> : <Ico d={SPEAK} />}{voice ? 'Voice on' : 'Voice off'}</button>}
+        {open && voice && <button onClick={toggleBarge} className={`btn-tint ${bargeIn ? 'btn-purple' : ''}`} title="Start talking while the interviewer speaks to cut in. Turn it off if your speakers set it off.">{bargeIn ? 'Interrupt on' : 'Interrupt off'}</button>}
         {open ? <button onClick={finish} className="btn-tint btn-red" disabled={busy}><Ico d={<rect x="6" y="6" width="12" height="12" rx="2"/>} />End</button>
           : <button onClick={() => setStatus('open')} className="btn-tint btn-green"><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Resume</button>}
       </PageBar>
@@ -520,6 +630,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
             {preparing && !busy && <AskBubble text="" full="." />}
             {q && !preparing && <AskBubble text={shown?.q === q.q ? q.q.slice(0, shown.n) : ''} full={q.q} choices={q.type === 'choice' ? q.choices : null} onPick={j => submit(`${'ABCD'[j]}. ${q.choices[j]}`, j)} busy={busy}
               tag={tagOf(q)} speaking={speaking?.key === 'q' && speaking.phase} onSpeak={() => replay('q', q.q)} />}
+            {q?.hint && full && !preparing && <HintBubble text={q.hint} />}
             <div ref={end} />
           </div>
         </div>
@@ -528,6 +639,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
             {(err || mic.on || sendIn > 0) && <div className="flex items-center gap-2 text-[11px] min-h-[16px]">
               {mic.on && <span className={`inline-flex items-center gap-1.5 ${mic.state === 'speaking' ? 'text-accent' : 'text-dim'}`}>{mic.state === 'loading' || mic.state === 'transcribing' ? <Spin /> : <span className={`w-2 h-2 rounded-full ${mic.state === 'speaking' ? 'bg-accent animate-pulse' : 'bg-success'}`} />}{MIC_LABEL[mic.state]}</span>}
               {sendIn > 0 && <span className="text-dim">· sending in {sendIn}s, keep talking to add more</span>}
+              {hold > 0 && <span className="text-accent">· take your time, I'm listening</span>}
               {err && <span className="text-error truncate">{err}</span>}
             </div>}
             <div className="flex items-end gap-2.5">
@@ -538,7 +650,10 @@ function Session({ study, iv, setIv, onBack, bar }) {
               </button>
               <textarea dir="auto" rows={5} className="input flex-1 resize-y min-h-[140px] max-h-[45vh] text-[15px] leading-relaxed" placeholder={!q || !full ? 'Wait for the question…' : voice ? 'Speak your answer, or type it… (Ctrl+Enter to send)' : 'Type your answer… (Ctrl+Enter to send)'}
                 value={draft} disabled={busy || !q} onChange={e => { manual.current = true; setSendIn(0); setDraft(e.target.value) }} onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && submit()} />
-              <button className="btn btn-primary h-11 inline-flex items-center gap-1.5" disabled={busy || !q || !full} onClick={() => submit()}>{busy ? <Spin /> : <>Send<Ico d={<path d="m9 18 6-6-6-6"/>} /></>}</button>
+              <div className="flex flex-col gap-2">
+                <button className="btn btn-primary h-11 inline-flex items-center justify-center gap-1.5" disabled={busy || !q || !full} onClick={() => submit()}>{busy ? <Spin /> : <>Send<Ico d={<path d="m9 18 6-6-6-6"/>} /></>}</button>
+                <button className="btn-tint h-9 inline-flex items-center justify-center gap-1.5 text-xs" disabled={busy || !q || !full || hinting || !!q?.hint} onClick={getHint} title="A small nudge. It costs 2 points on this answer.">{hinting ? <Spin /> : <Ico s={13} d={<><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></>} />}Hint</button>
+              </div>
             </div>
           </div>
         </div>
@@ -547,10 +662,35 @@ function Session({ study, iv, setIv, onBack, bar }) {
   )
 }
 
+// rubric skills across mock interviews, oldest to newest: is each one getting better?
+function Progress({ list }) {
+  const ivs = list.filter(i => real(i) && i.turns?.some(t => t.rubric)).sort((a, b) => a.at - b.at)
+  if (ivs.length < 2) return null
+  const crit = {}
+  ivs.forEach((iv, n) => { const sums = {}; iv.turns.forEach(t => Object.entries(t.rubric || {}).forEach(([k, v]) => (sums[k] ||= []).push(v))); Object.entries(sums).forEach(([k, L]) => (crit[k] ||= []).push([n, L.reduce((a, x) => a + x, 0) / L.length])) })
+  const rows = Object.entries(crit).filter(([, P]) => P.length >= 2)
+  if (!rows.length) return null
+  return (
+    <div className="island p-4 flex flex-col gap-3">
+      <div className="flex items-baseline gap-2"><span className="text-sm font-semibold text-white">Your progress</span><span className="text-xs text-dim">rubric skills across {ivs.length} mock interviews, oldest to newest</span></div>
+      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>{rows.map(([k, P]) => {
+        const first = P[0][1], last = P[P.length - 1][1], d = last - first, W = 110, H = 28
+        const pts = P.map(([, v], j) => `${(j / (P.length - 1)) * W},${H - (v / 10) * H}`).join(' ')
+        return (
+          <div key={k} className="rounded-lg bg-app border border-border px-3 py-2 flex items-center gap-3">
+            <div className="min-w-0 flex-1"><div className="text-xs text-gray-200 truncate">{k}</div><div className="text-[11px] font-mono text-dim">{first.toFixed(1)} → <span className={tone(last)}>{last.toFixed(1)}</span> <span className={d > 0.3 ? 'text-success' : d < -0.3 ? 'text-error' : 'text-dim'}>{d > 0 ? '+' : ''}{d.toFixed(1)}</span></div></div>
+            <svg width={W} height={H} className={d >= 0 ? 'text-success' : 'text-error'} aria-hidden><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" /></svg>
+          </div>
+        )
+      })}</div>
+    </div>
+  )
+}
+
 // scope: GENERAL = the generic page (real interview rounds); a study id = inside that study's workspace (exam on its material)
-export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool }) {
+export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool, openId }) {
   const { list, update: setIv, add, remove } = useSessions('interviews', studies, scope)
-  const [sel, setSel] = useState(null) // null = cards, 'new' = hero, id = session
+  const [sel, setSel] = useState(openId || null) // null = cards, 'new' = hero, 'prep' | 'stories', id = session
   const [busy, setBusy] = useState(false)
   const active = list?.find(i => i.id === sel)
   const start = async opts => {
@@ -561,6 +701,8 @@ export default function Interview({ studies, scope = GENERAL, bar = 'interview',
     if (!await ask({ title: `Delete this ${real(iv) ? roundName(iv.round).toLowerCase() : iv.difficulty} interview?`, body: 'Its questions, answers and score are removed.', ok: 'Delete' })) return
     await api.del(`/api/studies/${iv.studyId}/interviews/${iv.id}`); remove(iv.id); if (sel === iv.id) setSel(null)
   }
+  // a coding topic from a prep plan: the generic Code page opens its start panel with the topic filled in
+  const coding = topic => { try { localStorage.setItem('cram:code-topic', topic) } catch {} window.dispatchEvent(new CustomEvent('cram:code-topic', { detail: topic })); onOpenTool?.(null, 'code') }
   const css = (
       <style>{`
         @keyframes iv-breathe { 0%,100% { transform: translate(-50%, 0) scale(1); opacity: .6 } 50% { transform: translate(-50%, 8px) scale(1.12); opacity: 1 } }
@@ -573,10 +715,21 @@ export default function Interview({ studies, scope = GENERAL, bar = 'interview',
       `}</style>
   )
   if (!list) return <div className="h-full grid place-items-center text-xs text-dim">Loading…</div>
+  if (sel === 'prep') return <>{css}<JobPrep bar={bar} busy={busy} onBack={() => setSel(null)} onStartRound={o => start({ persona: 'neutral', ...o })} onCoding={coding} /></>
+  if (sel === 'stories') return <>{css}<StoryBank bar={bar} onBack={() => setSel(null)} /></>
   if (active) return <>{css}<Session key={active.id} study={{ id: scope }} iv={active} setIv={setIv} onBack={() => setSel(null)} bar={bar} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered wide={scope === GENERAL}>
     {list.length > 0 && <button onClick={() => setSel(null)} className="btn-ghost text-xs inline-flex items-center gap-1 mb-2"><Ico d={<path d="m15 18-6-6 6-6"/>} />Back to interviews</button>}
-    {scope === GENERAL ? <RealHero busy={busy} onStart={start} onCoding={() => onOpenTool?.(null, 'code')} /> : <Hero busy={busy} onStart={start} />}
+    {scope === GENERAL ? <RealHero busy={busy} onStart={start} onCoding={() => onOpenTool?.(null, 'code')} onPrep={() => setSel('prep')} onStories={() => setSel('stories')} /> : <Hero busy={busy} onStart={start} />}
   </Centered></>
-  return <>{css}<Grid onNew={() => setSel('new')} newLabel={scope === GENERAL ? 'New mock interview' : 'New interview'}>{list.map(iv => <Card key={iv.id} iv={iv} onOpen={() => setSel(iv.id)} onDelete={() => del(iv)} />)}</Grid></>
+  const grid = <Grid onNew={() => setSel('new')} newLabel={scope === GENERAL ? 'New mock interview' : 'New interview'}>{list.map(iv => <Card key={iv.id} iv={iv} onOpen={() => setSel(iv.id)} onDelete={() => del(iv)} />)}</Grid>
+  if (scope !== GENERAL) return <>{css}{grid}</>
+  return <>{css}<div className="h-full flex flex-col min-h-0">
+    <div className="px-2 pt-2 flex flex-col gap-2 flex-shrink-0">
+      <div className="flex items-center gap-2"><span className="text-[10px] uppercase tracking-wider text-dim me-1">Prepare</span>
+        <button onClick={() => setSel('prep')} className="btn-tint text-xs">Job prep</button><button onClick={() => setSel('stories')} className="btn-tint text-xs">Story bank</button></div>
+      <Progress list={list} />
+    </div>
+    <div className="flex-1 min-h-0">{grid}</div>
+  </div></>
 }

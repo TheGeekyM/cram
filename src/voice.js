@@ -31,11 +31,12 @@ export async function speak(text, lang, onStart) {
 }
 
 // Mic with voice activity detection. state: off | loading | listening | speaking | transcribing
-// onText gets each utterance's text; onSpeechStart fires as soon as the learner starts talking.
-export function useMic({ lang, onText, onSpeechStart, onError }) {
+// onText(text, { secs, endAt }) gets each utterance with how long it was spoken; onSpeechStart fires as soon as sound starts,
+// onSpeechRealStart once it has lasted long enough to be real speech (safe for interrupting the interviewer).
+export function useMic({ lang, onText, onSpeechStart, onSpeechRealStart, onError }) {
   const [state, setState] = useState('off')
   const vad = useRef(null), active = useRef(false), cb = useRef()
-  cb.current = { lang, onText, onSpeechStart, onError }
+  cb.current = { lang, onText, onSpeechStart, onSpeechRealStart, onError }
   const idle = () => setState(active.current ? 'listening' : 'off')
   const start = useCallback(async () => {
     active.current = true
@@ -49,14 +50,16 @@ export function useMic({ lang, onText, onSpeechStart, onError }) {
         model: 'v5', baseAssetPath: '/vad/', onnxWASMBasePath: '/vad/', startOnLoad: false,
         redemptionMs: 900, minSpeechMs: 250, preSpeechPadMs: 400, // a short pause closes one utterance; the caller decides when the answer is over
         onSpeechStart: () => { setState('speaking'); cb.current.onSpeechStart?.() },
+        onSpeechRealStart: () => cb.current.onSpeechRealStart?.(),
         onVADMisfire: idle,
         onSpeechEnd: async audio => {
+          const info = { secs: audio.length / 16000, endAt: Date.now() }
           setState('transcribing')
           const body = utils.encodeWAV(audio, 1, 16000, 1, 16)
-          const r = await fetch(`/api/transcribe?lang=${/arab/i.test(cb.current.lang) ? 'ar' : 'en'}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body })
+          const r = await fetch(`/api/transcribe?lang=${cb.current.lang === 'auto' ? 'auto' : /arab/i.test(cb.current.lang) ? 'ar' : 'en'}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body })
             .then(x => x.json()).catch(e => ({ error: e.message }))
           idle()
-          if (r.error) cb.current.onError?.(r.error); else if (r.text) cb.current.onText(r.text)
+          if (r.error) cb.current.onError?.(r.error); else if (r.text) cb.current.onText(r.text, info)
         },
       })
       if (!active.current) return setState('off') // switched off while loading

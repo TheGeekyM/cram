@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api.js'
+import { isRtl } from '../voice.js'
 import StudyScreen from './StudyScreen.jsx'
 import Interview, { StudyCoach } from './Interview.jsx'
 import CodeArena from './CodeArena.jsx'
@@ -19,18 +20,34 @@ export const WS_TOOLS = [
   ['coach', 'Coaching', <path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>, 'Weak spots and resources'],
 ]
 
-// ---------- the study's PDF: chapter list on the left, the PDF (Chromium's viewer) on the right ----------
-function Source({ study }) {
-  const [o, setO] = useState(null); const [page, setPage] = useState(1); const [jump, setJump] = useState(0); const [open, setOpen] = useState({})
+// ---------- the study's PDF: chapter list on the left (with Ask / Quiz / Cards per chapter), the PDF on the right ----------
+// ponytail: the PDF is Chromium's built-in viewer, whose text selection the page cannot read, so actions work per chapter
+function Source({ study, jump, onAsk, onOpenInterview }) {
+  const [o, setO] = useState(null); const [page, setPage] = useState(1); const [frame, setFrame] = useState(0); const [open, setOpen] = useState({})
+  const [act, setAct] = useState(''); const [note, setNote] = useState('')
   const load = refresh => { setO(null); api.get(`/api/studies/${study.id}/outline${refresh ? '?refresh=1' : ''}`).then(setO).catch(e => setO({ error: e.message })) }
   useEffect(() => load(false), [study.id]) // eslint-disable-line
-  const go = p => { setPage(p); setJump(j => j + 1) } // remount the frame: a hash-only change does not move the PDF viewer
+  const go = p => { setPage(p); setFrame(j => j + 1) } // remount the frame: a hash-only change does not move the PDF viewer
+  useEffect(() => { if (jump?.p) go(jump.p) }, [jump?.n]) // a (p. N) citation clicked in the chat
   const items = o?.items || []
   const chapters = []; for (const it of items) { if (it.depth === 0 || !chapters.length) chapters.push({ ...it, kids: [] }); else chapters[chapters.length - 1].kids.push(it) }
+  chapters.forEach((c, i) => { c.to = chapters[i + 1] ? Math.max(c.page, chapters[i + 1].page - 1) : null })
   const current = [...chapters].reverse().find(c => c.page <= page)
+  const label = c => `"${c.title}" (PDF pages ${c.page}${c.to ? `-${c.to}` : ' onwards'})`
+  const quiz = async (c, i) => {
+    setAct(`${i}:quiz`); setNote('')
+    const language = (study.interviews || []).slice(-1)[0]?.language || (isRtl(c.title) ? 'Arabic' : 'English')
+    const r = await api.post(`/api/studies/${study.id}/interviews`, { difficulty: 'medium', language, focus: { title: `the chapter "${c.title}"`, from: c.page, to: c.to } })
+    setAct(''); if (r.error) return setNote(r.error); onOpenInterview(r.id)
+  }
+  const cards = async (c, i) => {
+    setAct(`${i}:cards`); setNote('')
+    const r = await api.post(`/api/studies/${study.id}/flashcards`, { n: 10, topic: `the chapter ${label(c)}` })
+    setAct(''); setNote(r.error || `${r.added?.length || 0} flashcards from «${c.title}» added to Flashcards.`)
+  }
   return (
     <div className="h-full flex gap-2.5 p-2.5 min-h-0">
-      <aside className="island w-72 flex-shrink-0 flex flex-col min-h-0">
+      <aside className="island w-80 flex-shrink-0 flex flex-col min-h-0">
         <div className="panel-header flex items-center gap-2">Chapters{items.length > 0 && <span className="normal-case tracking-normal font-normal text-dim">· {chapters.length}</span>}
           {o && !o.error && <button onClick={() => load(true)} className="ml-auto normal-case tracking-normal font-normal text-[11px] text-dim hover:text-white" title="Read the chapters again">Refresh</button>}</div>
         <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5" dir="auto">
@@ -39,11 +56,17 @@ function Source({ study }) {
           {o && !o.error && !items.length && <div className="text-xs text-dim text-center py-8 px-4">No chapters found in this PDF.</div>}
           {chapters.map((c, i) => (
             <div key={i}>
-              <div className={`flex items-center rounded-lg ${current === c ? 'bg-accent/15 text-white' : 'text-gray-300 hover:bg-white/5'}`}>
+              <div className={`group flex items-center rounded-lg ${current === c ? 'bg-accent/15 text-white' : 'text-gray-300 hover:bg-white/5'}`}>
                 <button onClick={() => setOpen(x => ({ ...x, [i]: !x[i] }))} disabled={!c.kids.length} className={`w-6 h-7 grid place-items-center text-dim flex-shrink-0 ${c.kids.length ? 'hover:text-white' : 'opacity-0'}`} aria-label={open[i] ? 'Hide sections' : 'Show sections'}>
                   <Ico s={12} d={<path d={open[i] ? 'm6 9 6 6 6-6' : 'm9 18 6-6-6-6'} />} />
                 </button>
                 <button onClick={() => go(c.page)} className="flex-1 min-w-0 flex items-baseline gap-2 py-1.5 pr-2 text-left text-sm"><span className="truncate" title={c.title}>{c.title}</span><span className="ml-auto text-[11px] text-dim font-mono flex-shrink-0">{c.page}</span></button>
+                <span className={`${act.startsWith(`${i}:`) ? 'flex' : 'hidden group-hover:flex'} items-center gap-0.5 pe-1.5 flex-shrink-0`}>
+                  {[['ask', 'Ask', 'Explain this chapter in the chat', () => onAsk(`Explain the chapter ${label(c)}: the key ideas in simple words, with examples.`)],
+                    ['quiz', 'Quiz', 'Start an interview on this chapter only', () => quiz(c, i)],
+                    ['cards', 'Cards', 'Make 10 flashcards from this chapter', () => cards(c, i)]].map(([k, l, t, f]) => (
+                    <button key={k} onClick={f} disabled={!!act} title={t} className="text-[10px] px-1.5 py-0.5 rounded bg-app border border-border text-dim hover:text-white hover:border-accent/50">{act === `${i}:${k}` ? '…' : l}</button>))}
+                </span>
               </div>
               {open[i] && c.kids.map((k, j) => (
                 <button key={j} onClick={() => go(k.page)} style={{ paddingLeft: 16 + k.depth * 14 }} className="w-full flex items-baseline gap-2 py-1 pr-2 rounded-md text-left text-xs text-dim hover:text-white hover:bg-white/5">
@@ -51,21 +74,25 @@ function Source({ study }) {
                 </button>))}
             </div>))}
         </div>
+        {note && <div className="px-3 py-2 border-t border-border text-[11px] text-gray-300">{note}</div>}
         {o?.from === 'ai' && <div className="px-3 py-2 border-t border-border text-[10px] text-dim">This PDF has no bookmarks, so Claude read the contents. Page numbers can be a page or two off.</div>}
       </aside>
-      <div className="island flex-1 min-w-0 overflow-hidden"><iframe key={jump} src={`/api/studies/${study.id}/source.pdf#page=${page}`} title={`${study.title} PDF`} className="w-full h-full border-0" /></div>
+      <div className="island flex-1 min-w-0 overflow-hidden"><iframe key={frame} src={`/api/studies/${study.id}/source.pdf#page=${page}`} title={`${study.title} PDF`} className="w-full h-full border-0" /></div>
     </div>
   )
 }
 
 export default function StudyWorkspace({ study, setStudy, tool, setTool, onChanged }) {
   const one = [{ id: study.id, title: study.title }]
+  const [srcJump, setSrcJump] = useState(null); const [prefill, setPrefill] = useState(null); const [openIv, setOpenIv] = useState(null)
+  const pick = id => { setOpenIv(null); setTool(id) }
   return (
     <div className="h-full flex min-h-0">
       <div className="flex-1 min-w-0 min-h-0">
-        {tool === 'chat' && <StudyScreen study={study} setStudy={setStudy} />}
-        {tool === 'source' && study.hasPdf && <Source study={study} />}
-        {tool === 'interview' && <Interview studies={one} scope={study.id} bar="study" />}
+        {tool === 'chat' && <StudyScreen study={study} setStudy={setStudy} prefill={prefill} onPrefillUsed={() => setPrefill(null)}
+          onCite={study.hasPdf ? p => { setSrcJump({ p, n: Date.now() }); setTool('source') } : undefined} />}
+        {tool === 'source' && study.hasPdf && <Source study={study} jump={srcJump} onAsk={text => { setPrefill({ text, n: Date.now() }); setTool('chat') }} onOpenInterview={id => { setOpenIv(id); setTool('interview') }} />}
+        {tool === 'interview' && <Interview key={openIv || 'list'} studies={one} scope={study.id} bar="study" openId={openIv} />}
         {tool === 'code' && <CodeArena studies={one} scope={study.id} bar="study" />}
         {tool === 'notes' && <NotesScreen project={{ id: 'notes', name: 'Notes' }} studyId={study.id} embedded />}
         {tool === 'review' && <Review studies={one} scope={study.id} bar="study" onChanged={onChanged} />}
@@ -78,7 +105,7 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
         </div>
         <div className="text-[10px] uppercase tracking-[0.18em] text-dim px-2.5 pb-1">Study tools</div>
         {WS_TOOLS.filter(t => t[0] !== 'source' || study.hasPdf).map(([id, label, ic, sub]) => (
-          <button key={id} onClick={() => setTool(id)} className={`flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${tool === id ? 'bg-accent/15 text-white' : 'text-dim hover:text-white hover:bg-white/5'}`}>
+          <button key={id} onClick={() => pick(id)} className={`flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${tool === id ? 'bg-accent/15 text-white' : 'text-dim hover:text-white hover:bg-white/5'}`}>
             <span className={`mt-0.5 ${tool === id ? 'text-accent' : ''}`}><Ico d={ic} /></span>
             <span className="min-w-0"><span className="block text-sm">{label}</span><span className="block text-[11px] text-dim truncate">{sub}</span></span>
           </button>

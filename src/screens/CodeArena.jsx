@@ -19,8 +19,8 @@ const langOf = id => LANGS.find(l => l[0] === id) || LANGS[0]
 const GLYPHS = ['{ }', '=>', 'O(n)', '[ ]', 'fn', '&&', '::', '//', 'λ', '0x', '</>', 'if', '∑', '++', '?:', 'ret']
 
 // ---------- hero: floating glyph field + start card (whole page when the study has no challenges yet) ----------
-function Hero({ onStart, busy, general }) {
-  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState('')
+function Hero({ onStart, busy, general, topic0 = '' }) {
+  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState(topic0)
   const start = () => onStart({ language: lang, difficulty: d, topic })
   const glyphs = useMemo(() => GLYPHS.map((g, i) => ({ g, x: (i * 37) % 100, y: (i * 53) % 100, dur: 6 + (i % 5) * 1.5, delay: -(i * 0.7), size: 11 + (i % 4) * 3 })), [])
   return (
@@ -195,7 +195,13 @@ function Arena({ study, ch, setCh, onBack, onNext, bar }) {
 export default function CodeArena({ studies, scope = GENERAL, bar = 'code' }) {
   const { list, update: setCh, add, remove } = useSessions('challenges', studies, scope)
   const [sel, setSel] = useState(null) // null = cards, 'new' = hero, id = arena
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(false); const [topic, setTopic] = useState('')
+  useEffect(() => {
+    if (scope !== GENERAL) return
+    const take = t => { try { localStorage.removeItem('cram:code-topic') } catch {} setTopic(t); setSel('new') }
+    const t = localStorage.getItem('cram:code-topic'); if (t) take(t)
+    const f = e => take(e.detail); window.addEventListener('cram:code-topic', f); return () => window.removeEventListener('cram:code-topic', f)
+  }, [scope])
   const active = list?.find(c => c.id === sel && c.statement)
   const start = async opts => {
     setBusy(true); const c = await api.post(`/api/studies/${scope}/challenge`, opts); setBusy(false)
@@ -217,7 +223,7 @@ export default function CodeArena({ studies, scope = GENERAL, bar = 'code' }) {
   if (active) return <>{css}<Arena key={active.id} study={{ id: scope }} ch={active} setCh={setCh} onBack={() => setSel(null)} onNext={c => { add(c, scope); setSel(c.id) }} bar={bar} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered>
     {list.length > 0 && <button onClick={() => setSel(null)} className="btn-ghost text-xs inline-flex items-center gap-1 mb-2"><Ico d={<path d="m15 18-6-6 6-6"/>} />Back to challenges</button>}
-    <Hero busy={busy} onStart={start} general={scope === GENERAL} />
+    <Hero key={topic} busy={busy} onStart={start} general={scope === GENERAL} topic0={topic} />
   </Centered></>
   return <>{css}<Grid onNew={() => setSel('new')} newLabel="New challenge">{list.map(c => <Card key={c.id} c={c} onOpen={() => setSel(c.id)} onDelete={() => del(c)} />)}</Grid></>
 }

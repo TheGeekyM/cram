@@ -17,12 +17,16 @@ function sanitize(html) {
   return tpl.innerHTML
 }
 
-export default function Markdown({ text, className = '' }) {
+// onCite(page): page citations like (p. 42) or (ص 42) become links that call it
+export default function Markdown({ text, className = '', onCite }) {
   if (!text?.trim()) return null
+  let html = sanitize(mdToHtml(text))
+  if (onCite) html = html.replace(/\((?:p|pp|page|ص|صفحة)\.?\s*(\d{1,4})(?:\s*[-–]\s*\d{1,4})?\)/gi, (m, n) => `<a href="#" data-page="${n}" class="text-accent hover:underline">${m}</a>`)
   return (
     <div
       className={`kb-rich text-sm text-gray-300 leading-relaxed ${className}`}
-      dangerouslySetInnerHTML={{ __html: sanitize(mdToHtml(text)) }}
+      onClick={onCite ? e => { const a = e.target.closest?.('[data-page]'); if (a) { e.preventDefault(); onCite(+a.dataset.page) } } : undefined}
+      dangerouslySetInnerHTML={{ __html: html }}
     />
   )
 }

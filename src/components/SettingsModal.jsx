@@ -44,6 +44,8 @@ function ElevenPanel({ settings, onChange }) {
     if (!r.headers.get('content-type')?.startsWith('audio/')) { setPlaying(null); return setErr((await r.json().catch(() => ({}))).error || 'Could not play this voice.') }
     const a = audio.current = new Audio(URL.createObjectURL(await r.blob())); a.onended = () => setPlaying(null); a.play().catch(() => setPlaying(null)); setPlaying(`t:${v.id}`)
   }
+  const [usage, setUsage] = useState(null)
+  useEffect(() => { if (settings?.elevenKey) api.get('/api/eleven/usage').then(r => Array.isArray(r) && setUsage(r)) }, [settings?.elevenKey, settings?.elevenKey2])
   const chosen = settings?.elevenVoices || {}
   return (
     <div className="panel p-3 mb-3 flex flex-col gap-2">
@@ -52,6 +54,9 @@ function ElevenPanel({ settings, onChange }) {
       <div className="flex gap-2"><input className="input flex-1 font-mono text-xs" value={key} onChange={e => setKey(e.target.value)} placeholder="ElevenLabs API key (sk_…)" />
         <button className="btn btn-primary text-xs" disabled={!key || busy} onClick={connect}>{settings?.elevenKey ? 'Find voices' : 'Connect'}</button></div>
       <input className="input font-mono text-xs" value={key2} onChange={e => setKey2(e.target.value)} placeholder="Backup key (optional, used when the first runs out)" />
+      {usage?.map(u => <div key={u.name} className="text-[11px]">{u.error ? <span className="text-error">{u.name === 'main' ? 'Main' : 'Backup'} key: {u.error}</span> : <>
+        <div className="flex text-dim gap-2"><span>{u.name === 'main' ? 'Main key' : 'Backup key'} · {u.tier}</span><span className="ms-auto font-mono">{u.used.toLocaleString()} / {u.limit.toLocaleString()} characters · resets {new Date(u.resetAt).toLocaleDateString()}</span></div>
+        <div className="h-1.5 rounded-full bg-panel-2 overflow-hidden mt-1"><div className={`h-full ${u.used / u.limit > .9 ? 'bg-error' : u.used / u.limit > .7 ? 'bg-warning' : 'bg-success'}`} style={{ width: `${Math.min(100, u.used / u.limit * 100)}%` }} /></div></>}</div>)}
       <p className="text-[11px] text-dim -mt-1">Key from <a className="text-accent hover:underline" href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer">elevenlabs.io › API keys</a>. Questions in a language with no voice chosen keep the free voice.</p>
       {settings?.elevenKey && <select className="input text-xs" value={model} onChange={e => pickModel(e.target.value)}>{EL_MODELS.map(([id, l]) => <option key={id} value={id}>{l}</option>)}</select>}
       {(list || busy) && <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 self-start">{[['ar', 'Arabic (Egyptian)'], ['en', 'English']].map(([l, t]) => <button key={l} onClick={() => { setLang(l); load(l) }} className={`text-xs px-3 py-1 rounded-md ${lang === l ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{t}</button>)}</div>}

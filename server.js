@@ -278,14 +278,38 @@ const ROUND_GUIDE = {
 };
 // Arabic is spoken Egyptian colloquial: formal فصحى sounds stiff read aloud, and real Egyptian interviewers mix in English tech terms
 const langRule = l => /arab/i.test(l) ? 'Language: Egyptian colloquial Arabic (عامية مصرية). Talk like a real Egyptian interviewer, in a natural spoken style, not formal فصحى and never like a news anchor: short sentences, everyday words, and now and then a natural filler where a person would pause (يعني، طيب، بص، خلينا نشوف). Keep technical terms (API, cache, database, deployment…) in English. Write every question, choice and feedback this way.' : `Language: ${l}. Write every question, choice and feedback in ${l}.`;
+// interviewer manner, picked when the round starts
+const PERSONAS = {
+  friendly: 'Your manner: warm and encouraging. Put them at ease and react kindly, but still probe for depth.\n',
+  neutral: 'Your manner: professional and neutral, like most real interviewers. Polite and focused, with no hints about how they are doing.\n',
+  tough: 'Your manner: demanding and fast-paced, like a bar-raiser. Short reactions, sharp follow-ups on anything vague, push on trade-offs and numbers. Never rude.\n',
+};
+// ---------- STAR story bank: the candidate's prepared stories, used by behavioral-style rounds and their coaching ----------
+const STORIES = path.join(DATA, 'stories.json');
+const loadStories = () => readJson(STORIES, []);
+app.get('/api/stories', (req, res) => res.json(loadStories()));
+app.post('/api/stories', (req, res) => {
+  const b = req.body || {}, list = loadStories(), clip = (v, n) => String(v || '').trim().slice(0, n);
+  const st = { id: clip(b.id, 40) || Date.now().toString(36), title: clip(b.title, 120), situation: clip(b.situation, 1500), task: clip(b.task, 1500), action: clip(b.action, 2500), result: clip(b.result, 1500),
+    skills: (Array.isArray(b.skills) ? b.skills : String(b.skills || '').split(',')).map(x => clip(x, 40)).filter(Boolean).slice(0, 8), updatedAt: Date.now() };
+  if (!st.title) return res.status(400).json({ error: 'Give the story a title.' });
+  const i = list.findIndex(x => x.id === st.id); if (i >= 0) list[i] = st; else list.unshift(st);
+  fs.writeFileSync(STORIES, JSON.stringify(list)); res.json(st);
+});
+app.delete('/api/stories/:sid', (req, res) => { fs.writeFileSync(STORIES, JSON.stringify(loadStories().filter(x => x.id !== req.params.sid))); res.json({ ok: true }); });
+const storiesFor = iv => {
+  const L = ['behavioral', 'situational', 'management'].includes(iv.round) ? loadStories() : [];
+  return L.length ? `The candidate prepared these STAR stories. Now and then ask them to walk you through one that fits, and probe it like a real interviewer (their own part, the numbers, what they would do differently):\n${L.slice(0, 12).map(x => `- "${x.title}"${x.skills.length ? ` (${x.skills.join(', ')})` : ''}: ${cut(x.situation, 160)} → ${cut(x.result, 120)}`).join('\n')}\n` : '';
+};
 const realBase = iv => `You are interviewing a candidate in a real ${ROUNDS[iv.round] || iv.round} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)}
 ${ROUND_GUIDE[iv.round] || ROUND_GUIDE.technical}
-${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
-const ivBase = iv => iv.mode === 'real' ? realBase(iv) : `You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. ${langRule(iv.language)}
+${PERSONAS[iv.persona] || ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
+const ivBase = iv => iv.mode === 'real' ? realBase(iv) : `You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. ${langRule(iv.language)}${iv.focus ? ` Ask only about ${iv.focus.title}${iv.focus.from ? ` (PDF pages ${iv.focus.from}${iv.focus.to ? `-${iv.focus.to}` : ' onwards'})` : ''}.` : ''}
 ${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1} (${t.type}): ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}`;
 // Two separate calls: grading is what the learner waits for; the next question is fetched behind the feedback.
-const gradePrompt = (iv, answer) => iv.mode === 'real' ? `${ivBase(iv)}Current question: ${iv.pending.q}\nThe candidate answered: ${answer || '(no answer)'}\n\nGrade it the way a calibrated interviewer for a ${iv.seniority} ${iv.role} would. Feedback in 3-6 lines: what landed, what was missing or weak, and what a strong ${iv.seniority}-level answer would include. Score each rubric criterion 0-10: ${RUBRICS[iv.round].join(', ')}. Respond with ONLY JSON: {"feedback": string, "score": number 0-10 overall, "rubric": {${RUBRICS[iv.round].map(k => `"${k}": number`).join(', ')}}}`
-  : `${ivBase(iv)}Current question (${iv.pending.type}): ${iv.pending.q}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}\nCorrect choice: ${'ABCD'[iv.pending.answerIndex] || '?'}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Respond with ONLY JSON: {"feedback": string, "correct": boolean, "score": number}`;
+const hintNote = p => p.hint ? `\nBefore answering they asked for a hint and got: "${p.hint}". Take 2 points off the overall score for needing it, and mention that in the feedback.` : '';
+const gradePrompt = (iv, answer) => iv.mode === 'real' ? `${ivBase(iv)}Current question: ${iv.pending.q}${hintNote(iv.pending)}\nThe candidate answered: ${answer || '(no answer)'}\n\nGrade it the way a calibrated interviewer for a ${iv.seniority} ${iv.role} would. Feedback in 3-6 lines: what landed, what was missing or weak, and what a strong ${iv.seniority}-level answer would include. Score each rubric criterion 0-10: ${RUBRICS[iv.round].join(', ')}. Respond with ONLY JSON: {"feedback": string, "score": number 0-10 overall, "rubric": {${RUBRICS[iv.round].map(k => `"${k}": number`).join(', ')}}}`
+  : `${ivBase(iv)}Current question (${iv.pending.type}): ${iv.pending.q}${hintNote(iv.pending)}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}\nCorrect choice: ${'ABCD'[iv.pending.answerIndex] || '?'}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Respond with ONLY JSON: {"feedback": string, "correct": boolean, "score": number}`;
 const followUps = iv => { let n = 0; for (let i = iv.turns.length - 1; i >= 0 && iv.turns[i].followUp; i--) n++; return n; };
 const nextPrompt = iv => iv.mode === 'real' ? `${ivBase(iv)}${iv.turns.length ? `Ask your next question like a real interviewer. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}. Otherwise move to a new topic or the next stage. Never repeat a question.` : 'Open the round with your first question (a one-line greeting before it is fine).'} Talk as in a live conversation: you may open with a very short natural reaction to their last answer (a few words, like «تمام، حلو» or "Got it") that never reveals whether it was right, then ask the question. No grading, no hints, no multiple choice. Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`
   : `${ivBase(iv)}Write the next question, building on the transcript: go deeper where the learner is strong, revisit gaps, never repeat a question. Speak to the learner as "you" and just ask the question: no preamble, no commentary on their previous answers, no explanation of why you chose it. Type "choice" (4 choices, exactly one correct) or "text" (short open answer, explain-it-to-me style); alternate the two types${iv.turns.length ? ` (last was ${iv.turns[iv.turns.length - 1].type})` : ''}. Respond with ONLY JSON: {"q": string, "type": "choice"|"text", "choices": [4 strings]|null, "answer": correct index|null}`;
@@ -295,21 +319,67 @@ app.post('/api/studies/:id/interviews', async (req, res) => {
   if (s.general) { // real interview: a round type for a target role; difficulty mirrors seniority for the older views
     if (!RUBRICS[round]) return res.status(400).json({ error: 'unknown round' });
     if (!String(role || '').trim()) return res.status(400).json({ error: 'Say which role you are interviewing for.' });
-    Object.assign(iv, { mode: 'real', round, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000) });
-  }
+    Object.assign(iv, { mode: 'real', round, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral' });
+  } else if (req.body.focus?.title) iv.focus = { title: String(req.body.focus.title).slice(0, 160), from: Math.round(+req.body.focus.from) || null, to: Math.round(+req.body.focus.to) || null };
   try { iv.pending = nextQ(await json(s, nextPrompt(iv))); (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 // answer the pending question: grade only (fast); the next question is a separate call
 app.post('/api/studies/:id/interviews/:iid/answer', async (req, res) => {
   const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv?.pending) return res.status(404).json({ error: 'no open question' });
-  const { answer = '', picked = null, secs = 0, elapsed } = req.body;
+  const { answer = '', picked = null, secs = 0, elapsed } = req.body, d = req.body.delivery;
+  const delivery = d && typeof d === 'object' ? Object.fromEntries(['secs', 'words', 'wpm', 'fillers', 'longPauses'].map(k => [k, Math.max(0, Math.round(+d[k] || 0))])) : null; // measured from the mic
   try {
-    const r = await json(s, gradePrompt(iv, answer));
-    const score = Math.max(0, Math.min(10, Math.round(+r.score || 0)));
-    const rubric = iv.mode === 'real' && r.rubric ? Object.fromEntries(RUBRICS[iv.round].map(k => [k, Math.max(0, Math.min(10, Math.round(+r.rubric[k] || 0)))])) : undefined;
-    iv.turns.push({ ...iv.pending, answer, picked, secs, feedback: r.feedback || '', correct: iv.mode === 'real' ? score >= 6 : !!r.correct, score, ...(rubric ? { rubric } : {}), at: Date.now() });
+    const r = await json(s, gradePrompt(iv, answer)), g = graded(iv, r);
+    iv.turns.push({ ...iv.pending, answer, picked, secs, feedback: r.feedback || '', ...g, ...(delivery ? { delivery } : {}), at: Date.now() });
     iv.pending = null; if (elapsed != null) iv.elapsed = elapsed; touch(s); res.json(iv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// ---------- around the interview: hints, the panel's hire decision, a strong model answer, answering a question again ----------
+const graded = (iv, r) => {
+  const score = Math.max(0, Math.min(10, Math.round(+r.score || 0)));
+  const rubric = iv.mode === 'real' && r.rubric ? Object.fromEntries(RUBRICS[iv.round].map(k => [k, Math.max(0, Math.min(10, Math.round(+r.rubric[k] || 0)))])) : undefined;
+  return { score, correct: iv.mode === 'real' ? score >= 6 : !!r.correct, ...(rubric ? { rubric } : {}) };
+};
+// write back into a fresh read: these calls take a while and the session may have been saved meanwhile
+const reread = (req, fn) => { const s2 = study(req.params.id), iv2 = findIv(s2, req.params.iid); if (!iv2) return null; fn(iv2); save(s2); return iv2; };
+app.post('/api/studies/:id/interviews/:iid/hint', async (req, res) => {
+  const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv?.pending) return res.status(404).json({ error: 'no open question' });
+  if (iv.pending.hint) return res.json(iv);
+  try {
+    const r = await json(s, `${ivBase(iv)}Current question: ${iv.pending.q}\nThe candidate asked for a hint. Give one short nudge (one sentence), the way a real interviewer would: point them in a direction without giving the answer away. Respond with ONLY JSON: {"hint": string}`);
+    const out = reread(req, iv2 => { if (iv2.pending?.q === iv.pending.q) iv2.pending.hint = String(r.hint || '').slice(0, 400); });
+    out ? res.json(out) : res.status(404).json({ error: 'no such interview' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+const VERDICTS = ['strong_hire', 'hire', 'lean_hire', 'lean_no_hire', 'no_hire'];
+app.post('/api/studies/:id/interviews/:iid/verdict', async (req, res) => {
+  const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv) return res.status(404).json({ error: 'no such interview' });
+  if (!iv.turns.length) return res.status(400).json({ error: 'Answer at least one question first.' });
+  try {
+    const r = await json(s, `${ivBase(iv)}The round is over. Decide the way a real hiring panel for a ${iv.seniority || ''} ${iv.role || 'candidate'} would, based only on the transcript. Be honest and calibrated: a single round rarely earns strong_hire, and short or vague answers are a no. Respond with ONLY JSON: {"verdict": ${VERDICTS.map(v => `"${v}"`).join('|')}, "summary": string (one or two sentences, as the panel would put it), "reasons": [2-4 short strings: the evidence behind the decision], "toPass": [1-3 short strings: what would change the decision next time]}`);
+    const out = reread(req, iv2 => { iv2.verdict = { verdict: VERDICTS.includes(r.verdict) ? r.verdict : 'lean_no_hire', summary: String(r.summary || ''), reasons: (r.reasons || []).map(String).slice(0, 4), toPass: (r.toPass || []).map(String).slice(0, 3), turns: iv.turns.length, at: Date.now() }; });
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+const turnOf = (req, res) => { const s = study(req.params.id), iv = findIv(s, req.params.iid), t = iv?.turns[+req.params.i]; if (!t) res.status(404).json({ error: 'no such answer' }); return { s, iv, t, i: +req.params.i }; };
+app.post('/api/studies/:id/interviews/:iid/turns/:i/model', async (req, res) => {
+  const { s, iv, t, i } = turnOf(req, res); if (!t) return;
+  if (t.model) return res.json(iv);
+  try {
+    const r = await json(s, `${ivBase({ ...iv, turns: iv.turns.slice(0, i) })}Question: ${t.q}\n${iv.mode === 'real'
+      ? `Write the answer a strong ${iv.seniority} ${iv.role} candidate would say out loud in the room: first person, natural spoken style, about 120-220 words${iv.round === 'behavioral' ? ', as a STAR story' : ''}. It should score 9-10 on: ${RUBRICS[iv.round].join(', ')}.`
+      : 'Write the ideal answer a top student would say out loud: clear, complete and concise, 60-150 words.'} Respond with ONLY JSON: {"answer": string}`);
+    res.json(reread(req, iv2 => { if (iv2.turns[i]) iv2.turns[i].model = String(r.answer || ''); }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/studies/:id/interviews/:iid/turns/:i/retry', async (req, res) => {
+  const { s, iv, t, i } = turnOf(req, res); if (!t) return;
+  const answer = String(req.body?.answer || '').trim().slice(0, 8000);
+  if (!answer) return res.status(400).json({ error: 'Say or type your new answer first.' });
+  try {
+    const r = await json(s, gradePrompt({ ...iv, turns: iv.turns.slice(0, i), pending: { ...t, hint: null } }, answer)), g = graded(iv, r);
+    res.json(reread(req, iv2 => { if (iv2.turns[i]) (iv2.turns[i].retries ||= []).push({ answer, score: g.score, feedback: String(r.feedback || ''), ...(g.rubric ? { rubric: g.rubric } : {}), at: Date.now() }); }));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // next question: idempotent, so the client can prefetch it while feedback is on screen
