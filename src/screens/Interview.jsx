@@ -509,7 +509,6 @@ function Session({ study, iv, setIv, onBack, bar }) {
   const [shown, setShown] = useState(null) // { q, n }: how much of the pending question is on screen
   const [speaking, setSpeaking] = useState(null) // { key, phase: 'loading' | 'playing' }
   const [sendIn, setSendIn] = useState(0); const manual = useRef(false) // voice answers send themselves after a quiet moment, unless you start typing
-  const [bargeIn, setBargeIn] = useState(() => localStorage.getItem('cram:barge-in') !== '0') // talk over the interviewer to cut in
   const [hold, setHold] = useState(0); const [hinting, setHinting] = useState(false); const barged = useRef(false)
   const talk = useRef({ secs: 0, pauses: 0, lastEnd: 0 }) // how this answer was spoken: seconds of speech and long pauses between utterances
   const nextReq = useRef(null); const end = useRef(); const box = useRef()
@@ -528,7 +527,6 @@ function Session({ study, iv, setIv, onBack, bar }) {
       setHold(0); setDraft(d => (d ? `${d} ${t}` : t)); setErr('')
     },
     onSpeechStart: () => setSendIn(0),
-    onSpeechRealStart: () => { if (speaking && bargeIn) { barged.current = true; stopSpeech() } }, // real speech, not a cough: the interviewer stops talking
     onError: setErr,
   })
   const micRef = useRef(); micRef.current = mic
@@ -551,18 +549,21 @@ function Session({ study, iv, setIv, onBack, bar }) {
     const spoken = [q.q, ...(q.choices || []).map((c, j) => `${'ABCD'[j]}. ${c}`)].join('. ')
     ;(async () => {
       reveal(0)
-      if (voice && bargeIn && !q.choices && !micRef.current.on) micRef.current.start() // listen while the question is read, so you can cut in
       const r = voice ? await say('q', spoken, k => reveal(Math.min(q.q.length, k))) : null
       if (!live) return
       if (r !== 'played') { if (barged.current) reveal(q.q.length); else await typeOut(q.q, reveal) } // voice off, stopped or unavailable: stream the text on its own
       if (!live) return
       reveal(q.q.length); setQStart(ref.current.elapsed)
-      if (voice && !q.choices && !micRef.current.on) micRef.current.start()
+      if (voice && !q.choices && !micRef.current.on && box.current?.offsetParent) micRef.current.start() // the mic opens once the question has been asked, and only on screen
     })()
     return () => { live = false }
   }, [q?.q, preparing, open]) // eslint-disable-line
   useEffect(() => () => stopSpeech(), [])
-  const full = !!q && shown?.q === q.q && shown.n >= q.q.length
+  useEffect(() => { // pages stay mounted when you leave them, just hidden: stop talking and listening then
+    const el = box.current; if (!el) return
+    const o = new IntersectionObserver(([e]) => { if (!e.isIntersecting) { stopSpeech(); micRef.current.stop() } }); o.observe(el); return () => o.disconnect()
+  }, [open])
+  const full =!!q && shown?.q === q.q && shown.n >= q.q.length
 
   const submit = async (answer = draft.trim(), picked = null) => {
     if (busy || !q) return
@@ -598,7 +599,6 @@ function Session({ study, iv, setIv, onBack, bar }) {
   const finish = async () => { if (await ask({ title: 'End this interview?', body: 'You can resume it any time from the list. Your answers and score are kept.', ok: 'End interview' })) { mic.stop(); stopSpeech(); setStatus('ended') } }
   const toggleVoice = () => { const v = !voice; setVoice(v); localStorage.setItem('cram:voice-interview', v ? '1' : '0'); if (!v) { stopSpeech(); mic.stop() } else fetch('/api/transcribe').catch(() => {}) }
   useEffect(() => { if (voice && open) fetch('/api/transcribe').catch(() => {}) }, []) // eslint-disable-line -- warm the recognizer up
-  const toggleBarge = () => { const v = !bargeIn; setBargeIn(v); localStorage.setItem('cram:barge-in', v ? '1' : '0') }
   const getHint = async () => {
     setHinting(true); setErr(''); const r = await api.post(`${base}/hint`, {}); setHinting(false)
     if (r.error) return setErr(r.error)
@@ -621,7 +621,6 @@ function Session({ study, iv, setIv, onBack, bar }) {
         </div>
         {open && <button onClick={toggleVoice} className={`btn-tint ${voice ? 'btn-purple' : ''}`} title="The interviewer speaks each question and the mic opens for your answer">
           {speaking?.phase === 'loading' ? <Spin /> : <Ico d={SPEAK} />}{voice ? 'Voice on' : 'Voice off'}</button>}
-        {open && voice && <button onClick={toggleBarge} className={`btn-tint ${bargeIn ? 'btn-purple' : ''}`} title="Start talking while the interviewer speaks to cut in. Turn it off if your speakers set it off.">{bargeIn ? 'Interrupt on' : 'Interrupt off'}</button>}
         {open ? <button onClick={finish} className="btn-tint btn-red" disabled={busy}><Ico d={<rect x="6" y="6" width="12" height="12" rx="2"/>} />End</button>
           : <button onClick={() => setStatus('open')} className="btn-tint btn-green"><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Resume</button>}
       </PageBar>
@@ -653,7 +652,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
               {err && <span className="text-error truncate">{err}</span>}
             </div>}
             <div className="flex items-end gap-2.5">
-              <button onClick={() => (mic.on ? mic.stop() : (stopSpeech(), mic.start()))} disabled={busy || !q || !full} title={mic.on ? 'Stop the mic' : 'Answer by voice'} aria-label={mic.on ? 'Stop the mic' : 'Answer by voice'}
+              <button onClick={() => (mic.on ? mic.stop() : (barged.current = !!speaking, stopSpeech(), mic.start()))} disabled={busy || !q || (!full && !speaking)} title={mic.on ? 'Stop the mic' : 'Answer by voice'} aria-label={mic.on ? 'Stop the mic' : 'Answer by voice'}
                 className={`relative w-11 h-11 rounded-full grid place-items-center flex-shrink-0 transition-colors ${mic.on ? 'bg-accent text-app' : 'bg-app border border-border text-dim hover:text-white'}`}>
                 {mic.state === 'speaking' && <span className="absolute inset-0 rounded-full border-2 border-accent" style={{ animation: 'iv-ring 1.2s ease-out infinite' }} />}
                 {mic.state === 'loading' ? <Spin /> : <Ico s={18} d={MIC} />}
