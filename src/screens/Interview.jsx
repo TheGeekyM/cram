@@ -408,8 +408,18 @@ function Details({ iv, base, setIv }) {
       <Statistics iv={iv} />
       <Coaching rep={iv.report} url={`${base}/report`} onReport={setIv} stale={iv.report && iv.report.turns !== iv.turns.length ? `Made after ${iv.report.turns} answers. You have ${iv.turns.length} now.` : ''} />
       <div className="island flex-shrink-0">
-        <div className="panel-header">Transcript · {iv.turns.length} question{iv.turns.length === 1 ? '' : 's'}</div>
-        <div className="p-2.5 flex flex-col gap-2">{iv.turns.map((t, i) => <Turn key={i} t={t} i={i} iv={iv} base={base} setIv={setIv} />)}</div>
+        <div className="panel-header">Transcript · {iv.turns.length} question{iv.turns.length === 1 ? '' : 's'}{iv.pending ? ' · 1 not answered' : ''}</div>
+        <div className="p-2.5 flex flex-col gap-2">
+          {iv.turns.map((t, i) => <Turn key={i} t={t} i={i} iv={iv} base={base} setIv={setIv} />)}
+          {iv.pending && ( // the question on screen when the interview ended: kept, asked again on resume
+            <div className="rounded-lg bg-app border border-dashed border-border p-3 flex flex-col gap-2" dir="auto">
+              <div className="flex items-center gap-2 text-xs"><span className="w-2 h-2 rounded-full bg-gray-500" /><span className="text-dim">Q{iv.turns.length + 1} · {iv.pending.followUp ? 'follow-up · ' : ''}{iv.pending.topic || (iv.pending.type === 'choice' ? 'multiple choice' : 'open answer')}{iv.pending.hint ? ' · hint used' : ''}</span><span className="ml-auto badge-yellow">Not answered</span></div>
+              <div dir={dirOf(iv.pending.q)} className="text-sm font-medium text-gray-100">{iv.pending.q}</div>
+              {iv.pending.choices && <div className="flex flex-col gap-1">{iv.pending.choices.map((c, j) => <div key={j} className="text-xs px-2.5 py-1.5 rounded-md border border-border flex gap-2"><span className="text-dim font-mono">{'ABCD'[j]}</span><span>{c}</span></div>)}</div>}
+              <div className="text-[11px] text-dim">The interview ended before you answered. Resume it to answer this question; it isn't counted in your score.</div>
+            </div>
+          )}
+        </div>
       </div>
     </>
   )
