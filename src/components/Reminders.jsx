@@ -1,10 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { load, save, loadFired, saveFired, due, nextAt, dayKey } from '../reminders.mjs'
+import { api } from '../api.js'
+import { due, nextAt, dayKey, GRACE } from '../reminders.mjs'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const BELL = <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const useReminders = () => { const [list, setList] = useState(load); useEffect(() => { const f = () => setList(load()); window.addEventListener('cram:reminders', f); return () => window.removeEventListener('cram:reminders', f) }, []); return list }
+// Reminders live on the server (DATA/reminders.json), so remind.js can fire them while Cram is closed.
+// One shared copy in this module; components re-render on the 'cram:reminders' event.
+let state = { list: [], fired: {}, whenClosed: true, cron: false }
+const emit = () => window.dispatchEvent(new Event('cram:reminders'))
+export async function loadReminders() {
+  const r = await api.get('/api/reminders').catch(() => ({ error: 'unreachable' }))
+  if (r.error) return state
+  state = r
+  try { // one-time move from localStorage, where reminders lived before
+    const old = JSON.parse(localStorage.getItem('cram:reminders') || 'null')
+    if (Array.isArray(old) && old.length && !state.list.length) await saveReminders({ list: old.map(({ snoozeUntil, ...x }) => x) })
+    localStorage.removeItem('cram:reminders'); localStorage.removeItem('cram:reminders-fired')
+  } catch {}
+  emit(); return state
+}
+export async function saveReminders(patch) {
+  state = { ...state, ...patch }; emit() // optimistic, then the server's cleaned copy
+  const r = await api.post('/api/reminders', patch)
+  if (!r.error) { state = r; emit() }
+  return r
+}
+const useReminders = () => { const [s, setS] = useState(state); useEffect(() => { const f = () => setS(state); window.addEventListener('cram:reminders', f); loadReminders().then(f); return () => window.removeEventListener('cram:reminders', f) }, []); return s }
 
 // three soft rising notes; Web Audio, no asset file
 function chime() {
@@ -28,13 +50,14 @@ export function fire(r) { chime(); notify(r); window.dispatchEvent(new CustomEve
 export function ReminderHost() {
   const [alert, setAlert] = useState(null); const title = useRef(document.title)
   useEffect(() => {
-    const tick = () => {
-      const now = new Date(), fired = loadFired(); let list = load(), changed = false
-      for (const r of list) if (due(r, now, fired)) {
-        fired[r.id] = dayKey(now); if (r.snoozeUntil) { r.snoozeUntil = null; changed = true }
-        fire(r)
-      }
-      saveFired(fired); if (changed) save(list)
+    const tick = async () => {
+      const cur = await loadReminders() // fresh: the closed-app job may have fired some already
+      const now = new Date(), hits = cur.list.filter(r => due(r, now, cur.fired))
+      if (!hits.length) return
+      const day = dayKey(now), ids = new Set(hits.map(r => r.id))
+      state = { ...state, fired: { ...state.fired, ...Object.fromEntries([...ids].map(id => [id, day])) }, list: state.list.map(r => ids.has(r.id) ? { ...r, snoozeUntil: null } : r) }; emit()
+      api.post('/api/reminders/fired', { ids: [...ids], day })
+      hits.forEach(fire)
     }
     const onAlert = e => setAlert(e.detail)
     window.addEventListener('cram:alert', onAlert) // listen before the first tick, or a reminder already due at launch fires into nothing
@@ -51,7 +74,7 @@ export function ReminderHost() {
   }, [alert])
   useEffect(() => { if (!alert) return; const k = e => e.key === 'Escape' && setAlert(null); window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [alert])
   if (!alert) return null
-  const snooze = min => { save(load().map(r => r.id === alert.id ? { ...r, snoozeUntil: Date.now() + min * 6e4 } : r)); setAlert(null) }
+  const snooze = min => { saveReminders({ list: state.list.map(r => r.id === alert.id ? { ...r, snoozeUntil: Date.now() + min * 6e4 } : r) }); setAlert(null) }
   const isTest = alert.id === 'test'
   return (
     <div className="fixed inset-0 z-[95] bg-black/70 backdrop-blur-[2px] flex items-center justify-center p-6 animate-fade-up" role="alertdialog" aria-modal="true" aria-labelledby="rem-title">
@@ -77,29 +100,29 @@ export function ReminderHost() {
 
 // Settings panel: add, toggle, edit days, delete, test.
 export function RemindersPanel() {
-  const list = useReminders()
+  const s = useReminders(), list = s.list
   const [time, setTime] = useState('19:00'); const [days, setDays] = useState([0, 1, 2, 3, 4, 5, 6]); const [label, setLabel] = useState('')
   const [perm, setPerm] = useState(() => { try { return Notification.permission } catch { return 'unsupported' } })
-  const upd = (id, patch) => save(list.map(r => r.id === id ? { ...r, ...patch } : r))
-  const add = () => { if (!time || !days.length) return; save([...list, { id: Date.now().toString(36), time, days: [...days].sort(), label: label.trim() || 'Time to study', on: true }]); setLabel('') }
+  const upd = (id, patch) => saveReminders({ list: list.map(r => r.id === id ? { ...r, ...patch } : r) })
+  const add = () => { if (!time || !days.length) return; saveReminders({ list: [...list, { id: Date.now().toString(36), time, days: [...days].sort(), label: label.trim() || 'Time to study', on: true }] }); setLabel('') }
   const askPerm = () => { try { Notification.requestPermission().then(setPerm) } catch {} }
   const DayPills = ({ value, onChange }) => (
     <div className="flex gap-0.5">{DAYS.map((d, i) => { const on = value.includes(i); return <button key={i} type="button" aria-pressed={on} onClick={() => onChange(on ? value.filter(x => x !== i) : [...value, i])} className={`w-7 h-6 rounded text-[10px] font-medium transition-colors ${on ? 'bg-accent/20 text-accent' : 'text-dim hover:text-white bg-app'}`}>{d.slice(0, 2)}</button> })}</div>
   )
-  const when = r => { const n = nextAt(r); if (!n) return r.on ? 'no days picked' : 'off'; const today = dayKey(n) === dayKey(new Date()); return `${r.snoozeUntil ? 'snoozed until' : 'next'} ${today ? 'today' : DAYS[n.getDay()]} ${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}` }
+  const when = r => { const n = nextAt(r, new Date(), s.fired); if (!n) return r.on ? 'no days picked' : 'off'; const today = dayKey(n) === dayKey(new Date()); return `${r.snoozeUntil ? 'snoozed until' : 'next'} ${today ? 'today' : DAYS[n.getDay()]} ${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}` }
   return (
     <div className="panel p-3 mb-3 flex flex-col gap-2.5">
       <div className="flex items-center gap-2">
-        <span className="text-accent"><Ico d={BELL} /></span><span className="text-xs font-semibold text-white flex-1">Alerts while Cram is open <span className="font-normal text-dim">· your own times</span></span>
+        <span className="text-accent"><Ico d={BELL} /></span><span className="text-xs font-semibold text-white flex-1">Reminders <span className="font-normal text-dim">· your own times</span></span>
         <button className="btn-ghost text-[11px]" onClick={() => fire({ id: 'test', time: new Date().toTimeString().slice(0, 5), label: label.trim() || 'Time to study' })}>Test alert</button>
       </div>
       {list.length > 0 && <div className="flex flex-col gap-1.5">{list.map(r => (
         <div key={r.id} className={`rounded-lg bg-app border border-border px-2.5 py-2 flex flex-col gap-1.5 ${r.on ? '' : 'opacity-60'}`}>
           <div className="flex items-center gap-2">
             <input type="time" className="bg-transparent text-sm font-mono text-white outline-none w-[112px] flex-shrink-0" value={r.time} onChange={e => e.target.value && upd(r.id, { time: e.target.value, snoozeUntil: null })} aria-label="Reminder time" />
-            <input className="bg-transparent text-xs text-gray-200 outline-none flex-1 min-w-0" dir="auto" value={r.label} onChange={e => upd(r.id, { label: e.target.value })} aria-label="Reminder label" />
+            <input key={`${r.id}:${r.label}`} className="bg-transparent text-xs text-gray-200 outline-none flex-1 min-w-0" dir="auto" defaultValue={r.label} onBlur={e => e.target.value.trim() && e.target.value !== r.label && upd(r.id, { label: e.target.value.trim() })} onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()} aria-label="Reminder label" />
             <button role="switch" aria-checked={r.on} aria-label={r.on ? 'Turn reminder off' : 'Turn reminder on'} onClick={() => upd(r.id, { on: !r.on, snoozeUntil: null })} className={`w-8 h-[18px] rounded-full relative transition-colors flex-shrink-0 ${r.on ? 'bg-accent' : 'bg-panel-2'}`}><span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all ${r.on ? 'left-[16px]' : 'left-[2px]'}`} /></button>
-            <button onClick={() => save(list.filter(x => x.id !== r.id))} className="w-6 h-6 rounded text-dim hover:text-error hover:bg-white/5 grid place-items-center flex-shrink-0" title="Delete reminder" aria-label="Delete reminder"><Ico s={12} d={<><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></>} /></button>
+            <button onClick={() => saveReminders({ list: list.filter(x => x.id !== r.id) })} className="w-6 h-6 rounded text-dim hover:text-error hover:bg-white/5 grid place-items-center flex-shrink-0" title="Delete reminder" aria-label="Delete reminder"><Ico s={12} d={<><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></>} /></button>
           </div>
           <div className="flex items-center gap-2"><DayPills value={r.days} onChange={v => upd(r.id, { days: v.sort() })} /><span className="ml-auto text-[10px] text-dim">{when(r)}</span></div>
         </div>))}
@@ -112,8 +135,14 @@ export function RemindersPanel() {
         </div>
         <DayPills value={days} onChange={setDays} />
       </div>
+      {s.cron && <label className="flex items-center gap-2 text-xs text-gray-200 cursor-pointer select-none">
+        <button type="button" role="switch" aria-checked={s.whenClosed !== false} onClick={() => saveReminders({ whenClosed: s.whenClosed === false })} className={`w-8 h-[18px] rounded-full relative transition-colors flex-shrink-0 ${s.whenClosed !== false ? 'bg-accent' : 'bg-panel-2'}`}><span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all ${s.whenClosed !== false ? 'left-[16px]' : 'left-[2px]'}`} /></button>
+        Also remind me when Cram is closed
+      </label>}
+      {s.cronOk === false && <div className="text-[11px] text-error -mt-1">Could not set up reminders for when Cram is closed (crontab failed). They still work while the app is open.</div>}
       <p className="text-[11px] text-dim -mt-0.5">
-        {perm === 'denied' ? 'Desktop notifications are blocked, so you will only get the in-app alert and chime.' : perm === 'default' ? <>Alerts show in the app with a chime. <button className="text-accent hover:underline" onClick={askPerm}>Allow desktop notifications</button> too.</> : 'Alerts pop up in the app with a chime and a desktop notification.'} These only fire while Cram is running; the daily reminder below works when it is closed. A reminder missed by up to 15 minutes still fires.
+        {perm === 'denied' ? 'Desktop notifications are blocked in the app, so while it is open you only get the in-app alert and chime.' : perm === 'default' ? <>While Cram is open you get an in-app alert with a chime. <button className="text-accent hover:underline" onClick={askPerm}>Allow desktop notifications</button> too.</> : 'While Cram is open you get an in-app alert, a chime and a desktop notification.'}
+        {' '}{s.cron && s.whenClosed !== false ? 'When it is closed, a desktop notification fires instead.' : 'Nothing fires while Cram is closed.'} A reminder missed by up to {GRACE} minutes still fires.
       </p>
     </div>
   )

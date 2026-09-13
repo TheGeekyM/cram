@@ -8,7 +8,7 @@ export default function Palette({ entries, studies, onGo, onStudy, onClose }) {
   const k = q.trim().toLowerCase()
   const items = [
     ...entries.map(([id, label], n) => ({ key: `go:${id}`, label, hint: 'Go to', sub: `Ctrl+${n + 1}`, run: () => onGo(id) })),
-    ...studies.map(s => ({ key: `st:${s.id}`, label: s.title, hint: 'Ask about', sub: s.subject, run: () => onStudy(s.id) })),
+    ...studies.map(s => ({ key: `st:${s.id}`, label: s.title, hint: 'Study', sub: s.subject, run: () => onStudy(s.id) })),
   ].filter(x => !k || `${x.label} ${x.sub || ''}`.toLowerCase().includes(k)).slice(0, 14)
   const key = e => {
     if (e.key === 'Escape') onClose()

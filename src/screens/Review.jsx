@@ -60,7 +60,7 @@ function Hero({ studies, onAdded }) {
 }
 
 // ---------- review session ----------
-function Session({ cards: initial, steps, onExit, onChanged }) {
+function Session({ cards: initial, steps, onExit, onChanged, bar }) {
   const [queue, setQueue] = useState(initial); const [i, setI] = useState(0); const [shown, setShown] = useState(false); const [pick, setPick] = useState(-1)
   const [counts, setCounts] = useState({ again: 0, hard: 0, good: 0, easy: 0 }); const [busy, setBusy] = useState(false); const requeued = useRef(new Set())
   const c = queue[i], done = i >= queue.length
@@ -93,8 +93,8 @@ function Session({ cards: initial, steps, onExit, onChanged }) {
   const step = c.step ?? -1
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
-      <PageBar tool="review">
-        <button onClick={onExit} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center" title="Exit review"><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>
+      <PageBar tool={bar} onBack={onExit}>
+        <span className="text-sm font-semibold text-white whitespace-nowrap">Reviewing</span>
         <div className="flex-1 min-w-0"><div className="h-1.5 rounded-full bg-panel-2 overflow-hidden"><div className="h-full bg-accent rounded-full transition-all" style={{ width: `${i / queue.length * 100}%` }} /></div></div>
         <span className="text-xs font-mono text-dim tabular-nums">{i + 1} / {queue.length}</span>
       </PageBar>
@@ -120,8 +120,9 @@ function Session({ cards: initial, steps, onExit, onChanged }) {
 }
 
 // ---------- deck ----------
-export default function Review({ studies = [], onChanged }) {
-  const [data, setData] = useState(null); const [filter, setFilter] = useState(''); const [gen, setGen] = useState(false); const [session, setSession] = useState(null); const [flash, setFlash] = useState('')
+// scope: a study id when shown inside that study's workspace (cards of that study only, no study filter)
+export default function Review({ studies = [], onChanged, scope = '', bar = 'review' }) {
+  const [data, setData] = useState(null); const [filter, setFilter] = useState(scope); const [gen, setGen] = useState(false); const [session, setSession] = useState(null); const [flash, setFlash] = useState('')
   const load = useCallback(async () => { const r = await api.get('/api/review'); setData(r.error ? { cards: [], due: 0, steps: [1, 3, 7, 14, 30, 60, 120], error: r.error } : r) }, [])
   useEffect(() => { load() }, [load])
   const added = n => { setFlash(`${n} flashcard${n === 1 ? '' : 's'} added`); setTimeout(() => setFlash(''), 3000); setGen(false); load(); onChanged?.() }
@@ -133,7 +134,7 @@ export default function Review({ studies = [], onChanged }) {
   `}</style>
   if (!data) return <div className="h-full grid place-items-center text-xs text-dim">Loading…</div>
   const now = Date.now(), steps = data.steps
-  if (session) return <>{css}<Session cards={session} steps={steps} onChanged={onChanged} onExit={() => { setSession(null); load() }} /></>
+  if (session) return <>{css}<Session bar={bar} cards={session} steps={steps} onChanged={onChanged} onExit={() => { setSession(null); load() }} /></>
   if (!data.cards.length) return <>{css}<Centered>{data.error && <div className="text-xs text-error mb-2">{data.error}</div>}<Hero studies={studies} onAdded={added} /></Centered></>
   const cards = data.cards.filter(c => !filter || c.studyId === filter), due = cards.filter(c => c.dueAt <= now)
   const nextDue = cards.filter(c => c.dueAt > now).reduce((m, c) => Math.min(m, c.dueAt), Infinity)
@@ -147,7 +148,7 @@ export default function Review({ studies = [], onChanged }) {
           <div className="relative flex items-center gap-3 flex-wrap">
             <div className="w-10 h-10 rounded-xl bg-accent/15 text-accent grid place-items-center"><Ico s={20} d={LAYERS} /></div>
             <div className="flex-1 min-w-0"><div className="text-base font-semibold text-white">Review</div><div className="text-xs text-dim">Missed questions and flashcards, spaced out until they stick.</div></div>
-            <select className="input w-56" value={filter} onChange={e => setFilter(e.target.value)}><option value="">All studies</option>{studies.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
+            {!scope && <select className="input w-56" value={filter} onChange={e => setFilter(e.target.value)}><option value="">All studies</option>{studies.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select>}
           </div>
           <div className="relative grid grid-cols-5 gap-2 text-center">
             {[[due.length, 'due now', 'text-accent'], [n.new, 'new', 'text-white'], [n.learning, 'learning', 'text-warning'], [n.mastered, 'mastered', 'text-success'], [cards.length, 'total', 'text-white']].map(([v, l, cl]) => <div key={l} className="rounded-lg bg-app border border-border py-3"><div className={`text-2xl font-mono font-semibold tabular-nums ${cl}`}>{v}</div><div className="text-[11px] text-dim mt-0.5">{l}</div></div>)}

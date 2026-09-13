@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import HomeScreen from './screens/HomeScreen.jsx'
-import StudyScreen from './screens/StudyScreen.jsx'
+import StudyWorkspace, { WS_TOOLS } from './screens/StudyWorkspace.jsx'
 import Interview from './screens/Interview.jsx'
 import CodeArena from './screens/CodeArena.jsx'
 import Review from './screens/Review.jsx'
@@ -13,8 +13,9 @@ import Palette from './components/Palette.jsx'
 import { NewDialog, ProfileDialog } from './components/Dialogs.jsx'
 import { api } from './api.js'
 
-// Tool-first shell: the sidebar lists pages (Dashboard, Plan, Studies) and tools (Ask, Interview, Code,
-// Review, Notes). Ask works on the current study; the others span every study.
+// Shell: the sidebar lists pages (Dashboard, Plan, Studies) and the generic tools (Interview, Code, Review, Notes).
+// Opening a study shows its workspace (page 'study'): chat plus that study's own tools. Generic Interview and
+// Code sessions live in the hidden '_general' study.
 // Keys: Ctrl+1…9 open the sidebar entries in order, Ctrl+K opens the quick switcher.
 const Ico = ({ d, s = 15 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 export const I = {
@@ -32,13 +33,21 @@ export const I = {
   new: <><path d="M12 5v14"/><path d="M5 12h14"/></>,
 }
 const PAGES = [['dashboard', 'Dashboard', I.grid], ['plan', 'Plan', I.plan], ['studies', 'Studies', I.book]]
-const TOOLS = [['ask', 'Ask', I.ask], ['interview', 'Interview', I.interview], ['code', 'Code', I.code], ['review', 'Review', I.review], ['notes', 'Notes', I.notes]]
+const TOOLS = [['interview', 'Interview', I.interview], ['code', 'Code', I.code], ['review', 'Review', I.review], ['notes', 'Notes', I.notes]]
 const ENTRIES = [...PAGES, ...TOOLS]
 const HOME = ['dashboard', 'studies'] // drawn by HomeScreen; every other entry has its own pane
-const isPane = p => ENTRIES.some(e => e[0] === p) && !HOME.includes(p)
+const isPane = p => p === 'study' || (ENTRIES.some(e => e[0] === p) && !HOME.includes(p))
+const WS_OF = { source: 'source', ask: 'chat', study: 'chat', chat: 'chat', interview: 'interview', code: 'code', notes: 'notes', review: 'review', coach: 'coach' } // tools a study link opens inside the workspace
+const SLOTS = ['code', 'interview', 'review', 'study'] // header slots a PageBar can fill
 const GLOBAL = { plan: Plan, interview: Interview, code: CodeArena, review: Review } // panes not bound to one study
 
-function Sidebar({ page, go, profile, onProfile, due, onPalette }) {
+// breadcrumb pieces for the app header: one separator, one style for the current page and for links back
+const Crumb = {
+  Sep: () => <span className="text-dim text-sm px-0.5 select-none" aria-hidden>›</span>,
+  here: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm font-semibold text-white min-w-0',
+  link: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm text-dim hover:text-white hover:bg-white/5 transition-colors',
+}
+function Sidebar({ page, go, profile, onProfile, due, onPalette, hidden }) {
   const Btn = ([id, label, ic], n) => (
     <button key={id} onClick={() => go(id)} title={`${label} (Ctrl+${n + 1})`} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${page === id ? 'bg-accent text-app font-semibold' : 'text-dim hover:text-white hover:bg-white/5'}`}>
       <Ico d={ic} />{label}
@@ -46,7 +55,7 @@ function Sidebar({ page, go, profile, onProfile, due, onPalette }) {
     </button>
   )
   return (
-    <aside className="island w-52 flex-shrink-0 flex flex-col p-3 gap-1 overflow-y-auto">
+    <aside className={`island w-60 flex-shrink-0 flex-col p-3 gap-1 overflow-y-auto ${hidden ? 'hidden' : 'flex'}`}>
       <div className="flex items-center gap-2 px-2 py-2"><div className="w-7 h-7 rounded-lg grid place-items-center text-sm font-bold text-app" style={{ background: 'rgb(var(--c-accent))' }}>C</div><span className="text-sm font-semibold text-white tracking-wide">CRAM</span></div>
       <button onClick={onPalette} className="flex items-center gap-2 px-3 py-1.5 mb-2 rounded-lg text-xs text-dim border border-border bg-app hover:text-white"><Ico s={13} d={I.search} />Jump to…<span className="ml-auto text-[10px] font-mono">Ctrl K</span></button>
       {PAGES.map((e, n) => Btn(e, n))}
@@ -59,26 +68,6 @@ function Sidebar({ page, go, profile, onProfile, due, onPalette }) {
   )
 }
 
-// Pick the study Ask works on: a card grid when none is chosen, a dropdown once one is.
-function StudyPicker({ studies, current, onPick, onNew }) {
-  return (
-    <div className="h-full overflow-y-auto hero-glow">
-      <div className="px-6 pt-[8vh] pb-10">
-        <div className="w-12 h-12 rounded-2xl bg-accent/15 text-accent grid place-items-center mb-3"><Ico s={22} d={I.ask} /></div>
-        <h1 className="text-2xl font-semibold text-white">Ask: pick a study</h1>
-        <p className="text-sm text-dim mt-1 mb-5">Ask answers from one study's material. Choose one here, or switch later from the dropdown at the top.</p>
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
-          {studies.map(s => <button key={s.id} onClick={() => onPick(s.id)} className={`island p-4 text-left hover:border-accent/50 transition-colors ${s.id === current ? 'border-accent' : ''}`}>
-            <div className="flex items-center gap-2 text-dim mb-2"><Ico d={s.hasPdf ? I.pdf : I.book} /><span className="text-[11px] ml-auto">{new Date(s.updatedAt).toLocaleDateString()}</span></div>
-            <div className="text-sm font-semibold text-white truncate">{s.title}</div><div className="text-[11px] text-dim truncate">{s.subject || (s.hasPdf ? 'PDF' : '')}</div>
-          </button>)}
-          <button onClick={onNew} className="island p-4 text-left border-dashed hover:border-accent/50 transition-colors flex flex-col justify-center items-center gap-1 text-dim hover:text-white min-h-[96px]"><Ico s={20} d={I.new} /><span className="text-xs">New study</span></button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function App() {
   const [studies, setStudies] = useState([]); const [open, setOpen] = useState({})
   const [page, setPage] = useState('dashboard'); const [current, setCurrent] = useState(() => localStorage.getItem('cram:study') || null)
@@ -86,7 +75,7 @@ export default function App() {
   const [settings, setSettings] = useState(null); const [showSettings, setShowSettings] = useState(false)
   const [profile, setProfile] = useState(null); const [editProfile, setEditProfile] = useState(false); const [stale, setStale] = useState('')
   const [newStudy, setNewStudy] = useState(null) // { mode, prefill, then: pane|null }
-  const [due, setDue] = useState(0); const [palette, setPalette] = useState(false)
+  const [due, setDue] = useState(0); const [palette, setPalette] = useState(false); const [wsTool, setWsTool] = useState('chat')
 
   const reload = useCallback(async () => setStudies(await api.get('/api/studies')), [])
   const refreshDue = useCallback(() => api.get('/api/review').then(r => setDue(r.due || 0)).catch(() => {}), [])
@@ -100,9 +89,11 @@ export default function App() {
   const setStudy = (sid, upd) => setOpen(o => ({ ...o, [sid]: typeof upd === 'function' ? upd(o[sid]) : upd }))
   const load = async sid => { if (open[sid]) return true; const s = await api.get(`/api/studies/${sid}`).catch(() => ({ error: 'unreachable' })); if (s.error) return false; setStudy(sid, s); return true }
   const go = p => { setPage(p); if (isPane(p)) setVisited(v => ({ ...v, [p]: true })); else reload() }
-  // open any entry, optionally making `sid` the current study (Ask uses it; the others span every study)
-  const openTool = async (sid, tool) => { if (sid && await load(sid)) setCurrent(sid); else if (tool === 'ask' && sid) setCurrent(null); go(ENTRIES.some(e => e[0] === tool) ? tool : 'dashboard') }
-  const pick = async sid => { if (await load(sid)) setCurrent(sid) }
+  // open any entry; with a real study id, the study's workspace on that tool (General practice sessions stay on the generic pages)
+  const openTool = async (sid, tool) => {
+    if (sid && sid !== '_general' && WS_OF[tool] && await load(sid)) { setCurrent(sid); setWsTool(WS_OF[tool]); return go('study') }
+    go(ENTRIES.some(e => e[0] === tool) ? tool : WS_OF[tool] ? 'studies' : 'dashboard') // a study tool with no study: pick one from Studies
+  }
   // Ctrl+1…9 and Ctrl+K by physical key, so they also work on an Arabic layout
   const goRef = useRef(go); goRef.current = go
   useEffect(() => {
@@ -116,42 +107,69 @@ export default function App() {
   }, [])
   // deep link: #s/<studyId>/<entry> opens that page on load (used by screenshots/tests too)
   useEffect(() => { const m = location.hash.match(/^#s\/(\w+)\/(\w+)$/); if (m) openTool(m[1], m[2]) }, []) // eslint-disable-line
-  useEffect(() => { if (current && page === 'ask') load(current) }, [current, page]) // eslint-disable-line
+  useEffect(() => { if (current && page === 'study') load(current) }, [current, page]) // eslint-disable-line
 
   const study = current ? open[current] : null
+  const wsLabel = WS_TOOLS.find(t => t[0] === wsTool)?.[1]
   const pane = isPane(page)
-  const created = async sid => { const then = newStudy?.then; setNewStudy(null); await reload(); openTool(sid, then || 'ask') }
+  // A detail view is open in a study's workspace, or when Code / Interview / Review filled their header slot (PageBar).
+  // Then the sidebar steps aside on every page but the dashboard; the menu button in the header brings it back.
+  const [slotFilled, setSlotFilled] = useState({}); const [peek, setPeek] = useState(false)
+  useEffect(() => {
+    const els = SLOTS.map(t => [t, document.getElementById(`bar-${t}`)]).filter(([, el]) => el)
+    const sync = () => setSlotFilled(Object.fromEntries(els.map(([t, el]) => [t, el.childElementCount > 0])))
+    const mo = new MutationObserver(sync); els.forEach(([, el]) => mo.observe(el, { childList: true })); sync()
+    return () => mo.disconnect()
+  }, [page]) // re-find the slots per page: on the very first render they may not be in the DOM yet
+  const detail = page === 'study' || (page !== 'dashboard' && !!slotFilled[page])
+  useEffect(() => setPeek(false), [page, detail])
+  const hideSide = detail && !peek
+  const created = async sid => { const then = newStudy?.then; setNewStudy(null); await reload(); openTool(sid, then || 'study') }
   return (
     <div className="h-screen flex bg-app p-2.5 gap-2.5">
-      <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} due={due} onPalette={() => setPalette(true)} />
+      <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} due={due} onPalette={() => setPalette(true)} hidden={hideSide} />
       <div className="flex-1 min-w-0 flex flex-col island overflow-hidden">
         {stale && <div className="px-4 py-2 text-xs bg-error/15 text-error border-b border-error/30 flex items-center gap-2"><b>Outdated server.</b><span className="flex-1 truncate">{stale}</span><button onClick={() => setStale('')} className="opacity-70 hover:opacity-100">✕</button></div>}
         {( // always mounted so the per-tool bar slots survive page switches; hidden where no header belongs
-          <div className={`app-bar min-h-11 py-1 flex items-center gap-2 px-3 border-b border-border bg-panel flex-shrink-0 ${pane && page !== 'plan' ? '' : 'hidden'}`}>
-            <span className="app-title flex items-center gap-2"><span className="text-dim"><Ico d={I[page] || I.grid} /></span><span className="text-sm font-semibold text-white">{ENTRIES.find(t => t[0] === page)?.[1]}</span></span>
-            {['code', 'interview', 'review'].map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
-            {page === 'ask' && <><span className="text-dim mx-1">›</span>
-              <select className="input w-auto py-1 max-w-[280px]" value={current || ''} onChange={e => e.target.value === '+' ? setNewStudy({ mode: 'subject', then: page }) : pick(e.target.value)}>
-                <option value="" disabled>Choose a study…</option>{studies.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}<option value="+">+ New study…</option>
-              </select>
-              {study && <span className="text-xs text-dim truncate hidden md:inline">{study.subject}</span>}</>}
+          <div className={`app-bar min-h-11 py-1 flex items-center gap-1 px-3 border-b border-border bg-panel flex-shrink-0 ${pane && page !== 'plan' ? '' : 'hidden'}`}>
+            {detail && <button onClick={() => setPeek(v => !v)} title={peek ? 'Hide menu' : 'Show menu'} aria-label={peek ? 'Hide menu' : 'Show menu'} className="w-7 h-7 rounded-md text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0"><Ico d={<><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></>} /></button>}
+            <button onClick={() => go('dashboard')} title="Home" aria-label="Home" className="w-7 h-7 rounded-md text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0"><span className="block -translate-y-px" aria-hidden><Ico d={<><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></>} /></span></button>{/* lifted 1px: a house reads low next to text */}
+            <Crumb.Sep />
+            {page === 'study' ? <>
+              <button onClick={() => go('studies')} className={Crumb.link}><span className="text-dim"><Ico d={I.book} /></span>Studies</button>
+              <Crumb.Sep />
+              {wsTool === 'chat'
+                ? <span className={`${Crumb.here} max-w-[320px]`} dir="auto"><span className="truncate">{study?.title || 'Loading…'}</span></span>
+                : <button onClick={() => setWsTool('chat')} title="Back to the chat" className={`${Crumb.link} max-w-[260px] min-w-0`} dir="auto"><span className="truncate">{study?.title}</span></button>}
+              {wsTool !== 'chat' && <><Crumb.Sep />{slotFilled.study
+                ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: 'study' }))} title={`Back to ${wsLabel}`} className={Crumb.link}>{wsLabel}</button>
+                : <span className={Crumb.here}>{wsLabel}</span>}</>}
+              {slotFilled.study && <Crumb.Sep />}
+            </> : <>
+              <span className="app-title flex items-center">
+                {slotFilled[page]
+                  ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: page }))} title={`Back to ${ENTRIES.find(t => t[0] === page)?.[1]}`} className={Crumb.link}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</button>
+                  : <span className={Crumb.here}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</span>}
+              </span>
+              {slotFilled[page] && <Crumb.Sep />}
+            </>}
+            {SLOTS.map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
           </div>
         )}
         <div className="flex-1 min-h-0 relative">
           <div className={`absolute inset-0 ${pane ? 'hidden' : ''}`}>
             <HomeScreen section={HOME.includes(page) ? page : 'dashboard'} studies={studies} settings={settings} profile={profile} onEditProfile={() => setEditProfile(true)}
-              onOpen={sid => openTool(sid, 'ask')} onOpenTool={openTool} onNew={(mode, prefill) => setNewStudy({ mode: mode || 'subject', prefill })} onDeleted={sid => { if (sid === current) setCurrent(null); setOpen(o => { const c = { ...o }; delete c[sid]; return c }); reload() }} />
+              onOpen={(sid, tool) => openTool(sid, tool || 'study')} onOpenTool={openTool} onNew={(mode, prefill) => setNewStudy({ mode: mode || 'subject', prefill })} onDeleted={sid => { if (sid === current) setCurrent(null); setOpen(o => { const c = { ...o }; delete c[sid]; return c }); reload() }} />
           </div>
-          {page === 'ask' && !current && <div className="absolute inset-0"><StudyPicker studies={studies} current={current} onPick={pick} onNew={() => setNewStudy({ mode: 'subject', then: page })} /></div>}
-          {page === 'ask' && current && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">Loading…</div>}
+          {page === 'study' && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">{current ? 'Loading…' : 'Pick a study from Studies.'}</div>}
           {Object.entries(GLOBAL).map(([t, Tool]) => (visited[t] || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} /></div>)}
-          {(visited.notes || page === 'notes') && <div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} onHome={() => go('dashboard')} onBack={() => go('ask')} /></div>}
-          {study && (visited.ask || page === 'ask') && <div key={`${study.id}:ask`} className={`absolute inset-0 ${page === 'ask' ? '' : 'hidden'}`}><StudyScreen study={study} setStudy={u => setStudy(study.id, u)} /></div>}
+          {(visited.notes || page === 'notes') && <div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} onHome={() => go('dashboard')} /></div>}
+          {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} /></div>}
         </div>
       </div>
       <ConfirmHost />
       <ReminderHost />
-      {palette && <Palette entries={ENTRIES} studies={studies} onClose={() => setPalette(false)} onGo={id => { setPalette(false); go(id) }} onStudy={sid => { setPalette(false); openTool(sid, 'ask') }} />}
+      {palette && <Palette entries={ENTRIES} studies={studies} onClose={() => setPalette(false)} onGo={id => { setPalette(false); go(id) }} onStudy={sid => { setPalette(false); openTool(sid, 'study') }} />}
       {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} onChange={loadSettings} />}
       {newStudy && <NewDialog mode={newStudy.mode} prefill={newStudy.prefill} onClose={() => setNewStudy(null)} onCreated={created} />}
       {editProfile && <ProfileDialog profile={profile || {}} onSave={p => { setProfile(p); setEditProfile(false) }} onClose={() => setEditProfile(false)} />}

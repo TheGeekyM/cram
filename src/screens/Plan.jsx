@@ -17,7 +17,7 @@ const I = {
   flag: <><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></>,
   left: <path d="m15 18-6-6 6-6"/>, right: <path d="m9 18 6-6-6-6"/>,
 }
-const TOOLS = [['', 'No tool'], ['ask', 'Ask'], ['interview', 'Interview'], ['code', 'Code'], ['review', 'Review'], ['notes', 'Notes']]
+const TOOLS = [['', 'No tool'], ['ask', 'Study chat'], ['interview', 'Interview'], ['code', 'Code'], ['review', 'Review'], ['notes', 'Notes']]
 const TOOL_IDS = TOOLS.map(t => t[0])
 const pad = n => String(n).padStart(2, '0')
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`

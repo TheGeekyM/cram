@@ -5,7 +5,7 @@ import 'highlight.js/styles/github-dark.css'
 import { api } from '../api.js'
 import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
-import { Centered, useSessions, StudySelect, BackBtn, PageBar, Grid, Tile, Stats } from '../components/SessionList.jsx'
+import { Centered, useSessions, GENERAL, PageBar, Grid, Tile, Stats } from '../components/SessionList.jsx'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
@@ -19,9 +19,9 @@ const langOf = id => LANGS.find(l => l[0] === id) || LANGS[0]
 const GLYPHS = ['{ }', '=>', 'O(n)', '[ ]', 'fn', '&&', '::', '//', 'λ', '0x', '</>', 'if', '∑', '++', '?:', 'ret']
 
 // ---------- hero: floating glyph field + start card (whole page when the study has no challenges yet) ----------
-function Hero({ onStart, busy, studies }) {
-  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState(''); const [sid, setSid] = useState(studies[0]?.id || '')
-  const start = () => sid && onStart({ language: lang, difficulty: d, topic, studyId: sid })
+function Hero({ onStart, busy, general }) {
+  const [lang, setLang] = useState('javascript'); const [d, setD] = useState('medium'); const [topic, setTopic] = useState('')
+  const start = () => onStart({ language: lang, difficulty: d, topic })
   const glyphs = useMemo(() => GLYPHS.map((g, i) => ({ g, x: (i * 37) % 100, y: (i * 53) % 100, dur: 6 + (i % 5) * 1.5, delay: -(i * 0.7), size: 11 + (i % 4) * 3 })), [])
   return (
     <div className="flex flex-col gap-2.5">
@@ -34,9 +34,8 @@ function Hero({ onStart, busy, studies }) {
           <div className="w-14 h-14 rounded-2xl bg-accent/15 text-accent grid place-items-center" style={{ animation: 'arena-bob 3s ease-in-out infinite' }}><Ico s={26} d={<><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></>} /></div>
           <div>
             <h2 className="text-xl font-semibold text-white">Ready for a challenge?</h2>
-            <p className="text-sm text-dim mt-1 max-w-md">One HackerRank-style problem built from your study material. Timer runs, tests are hidden until you run them, and a coach sits beside you.</p>
+            <p className="text-sm text-dim mt-1 max-w-md">{general ? 'One interview-style coding problem on the topic you pick, or a classic one if you leave it empty.' : 'One HackerRank-style problem built from your study material.'} Timer runs, tests are hidden until you run them, and a coach sits beside you.</p>
           </div>
-          <StudySelect studies={studies} value={sid} onChange={setSid} />
           <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 w-full max-w-2xl">
             {LANGS.map(([v, l, badge, color]) => (
               <button key={v} onClick={() => setLang(v)} className={`relative flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-xl border transition-all ${lang === v ? 'border-accent bg-accent/10 shadow-[0_0_0_3px_rgb(var(--c-accent)/.15)]' : 'border-border bg-app/60 hover:border-gray-500 hover:-translate-y-0.5'}`}>
@@ -48,9 +47,9 @@ function Hero({ onStart, busy, studies }) {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-center">
             <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5">{['easy', 'medium', 'hard'].map(v => <button key={v} onClick={() => setD(v)} className={`text-xs px-3 py-1.5 rounded-md capitalize ${d === v ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{v}</button>)}</div>
-            <input className="input w-52" placeholder="Focus topic (optional)" value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && start()} />
+            <input className="input w-64" placeholder={general ? 'Topic, e.g. sliding window, graphs' : 'Focus topic (optional)'} value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && start()} />
           </div>
-          <button disabled={busy || !sid} onClick={start} className="btn btn-primary flex flex-col items-center justify-center gap-1 w-32 h-20 text-base rounded-2xl" style={busy ? undefined : { animation: 'arena-pulse 2.4s ease-out infinite' }}>
+          <button disabled={busy} onClick={start} className="btn btn-primary flex flex-col items-center justify-center gap-1 w-32 h-20 text-base rounded-2xl" style={busy ? undefined : { animation: 'arena-pulse 2.4s ease-out infinite' }}>
             {busy ? <span className="text-xs flex flex-col items-center gap-0.5"><Wait label="Building…" /></span> : <><Ico s={26} d={<path d="m6 3 14 9-14 9V3z"/>} /><span>Start</span></>}
           </button>
         </div>
@@ -64,7 +63,7 @@ const dotOf = c => c.status === 'solved' ? 'bg-success' : c.status === 'given-up
 function Card({ c, onOpen, onDelete }) {
   const open = c.status === 'open'
   return (
-    <Tile dot={dotOf(c)} title={c.title} sub={langOf(c.language)[1]} study={c.studyTitle} onDelete={onDelete}
+    <Tile dot={dotOf(c)} title={c.title} sub={langOf(c.language)[1]} study={c.topic || ''} onDelete={onDelete}
       badge={<span className={`badge py-0 ${c.status === 'solved' ? 'badge-green' : c.status === 'given-up' ? 'badge-red' : 'badge-yellow'}`}>{c.status === 'solved' ? 'Solved' : c.status === 'given-up' ? 'Given up' : 'Open'}</span>}
       action={<button disabled={!c.statement} onClick={onOpen} className={`${open ? 'btn btn-primary' : 'btn-tint btn-blue'} inline-flex items-center justify-center gap-2 py-2.5 text-sm w-full`}>
         {open ? <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Continue</> : <><Ico d={<><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>} />Show</>}
@@ -94,13 +93,14 @@ function Timer({ elapsed, limitMin, status }) {
 
 // ---------- coach chat ----------
 function Coach({ study, ch, code, results, onChat }) {
-  const [text, setText] = useState(''); const [busy, setBusy] = useState(false); const [live, setLive] = useState(null); const end = useRef()
+  const [text, setText] = useState(''); const [busy, setBusy] = useState(false); const [live, setLive] = useState(null); const end = useRef(); const ctrl = useRef(null)
   const msgs = live ? [...ch.chat, ...live] : ch.chat
   useEffect(() => { end.current?.scrollIntoView({ block: 'end' }) }, [msgs])
+  useEffect(() => () => ctrl.current?.abort(), []) // leaving the arena stops a running answer
   const send = async (q = text.trim()) => {
-    if (!q || busy) return; setText(''); setBusy(true); setLive([{ role: 'user', content: q }, { role: 'assistant', content: '' }])
-    const t = await api.stream(`/api/studies/${study.id}/challenge/${ch.id}/chat`, { message: q, code, results }, x => setLive([{ role: 'user', content: q }, { role: 'assistant', content: x }]))
-    onChat([...ch.chat, { role: 'user', content: q }, { role: 'assistant', content: t }]); setLive(null); setBusy(false)
+    if (!q || busy) return; setText(''); setBusy(true); setLive([{ role: 'user', content: q }, { role: 'assistant', content: '' }]); ctrl.current = new AbortController()
+    const t = await api.stream(`/api/studies/${study.id}/challenge/${ch.id}/chat`, { message: q, code, results }, x => setLive([{ role: 'user', content: q }, { role: 'assistant', content: x }]), ctrl.current.signal)
+    onChat([...ch.chat, { role: 'user', content: q }, { role: 'assistant', content: t || '*(stopped)*' }]); setLive(null); setBusy(false); ctrl.current = null
   }
   const quick = ['Give me a hint', 'Why does my test fail?', 'Is my approach efficient?', 'Explain the problem differently']
   return (
@@ -113,14 +113,14 @@ function Coach({ study, ch, code, results, onChat }) {
       </div>
       <div className="p-2 border-t border-border flex flex-col gap-1.5">
         <div className="flex gap-1 flex-wrap">{quick.map(q => <button key={q} disabled={busy} onClick={() => send(q)} className="text-[11px] px-2 py-1 rounded-md border border-border text-dim hover:text-white hover:border-accent/50">{q}</button>)}</div>
-        <div className="flex gap-1.5"><input dir="auto" className="input flex-1" placeholder="Ask the coach…" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} /><button className="btn btn-primary px-3" disabled={busy} onClick={() => send()}><Ico d={<><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></>} /></button></div>
+        <div className="flex gap-1.5"><input dir="auto" className="input flex-1" placeholder="Ask the coach…" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} />{busy ? <button className="btn-tint btn-red px-3" onClick={() => ctrl.current?.abort()} title="Stop generating" aria-label="Stop generating"><Ico d={<rect x="6" y="6" width="12" height="12" rx="2"/>} /></button> : <button className="btn btn-primary px-3" onClick={() => send()}><Ico d={<><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></>} /></button>}</div>
       </div>
     </div>
   )
 }
 
 // ---------- arena ----------
-function Arena({ study, ch, setCh, onBack, onNext }) {
+function Arena({ study, ch, setCh, onBack, onNext, bar }) {
   const [code, setCode] = useState(ch.code || ch.starter); const [res, setRes] = useState(null); const [running, setRunning] = useState(false)
   const [review, setReview] = useState(''); const [reviewing, setReviewing] = useState(false); const [elapsed, setElapsed] = useState(ch.elapsed || 0); const [showCoach, setShowCoach] = useState(true)
   const base = `/api/studies/${study.id}/challenge/${ch.id}`
@@ -151,9 +151,8 @@ function Arena({ study, ch, setCh, onBack, onNext }) {
   const tab = e => { if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; setCode(code.slice(0, s) + '    ' + code.slice(t.selectionEnd)); requestAnimationFrame(() => t.selectionStart = t.selectionEnd = s + 4) } }
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
-      <PageBar tool="code">
-        <BackBtn onClick={onBack} title="Back to challenges" />
-        <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{ch.title}</div><div className="text-[11px] text-dim"><span className="capitalize">{ch.difficulty}</span> · {langOf(ch.language)[1]} · {ch.tests.length} tests</div></div>
+      <PageBar tool={bar} onBack={onBack}>
+        <div className="min-w-0 flex-1 flex items-baseline gap-2"><span className="text-sm font-semibold text-white whitespace-nowrap">{ch.title}</span><span className="text-xs text-dim truncate min-w-0"><span className="capitalize">{ch.difficulty}</span> · {langOf(ch.language)[1]} · {ch.tests.length} tests</span></div>
         {res && <span className={`badge ${res.passed === res.results.length ? 'badge-green' : 'badge-red'}`}>{res.passed} / {res.results.length}</span>}
         <Timer elapsed={elapsed} limitMin={ch.limitMin || 30} status={ch.status} />
         {ch.status === 'open' && <button onClick={giveUp} className="btn-tint btn-red">Give up</button>}
@@ -192,14 +191,15 @@ function Arena({ study, ch, setCh, onBack, onNext }) {
   )
 }
 
-export default function CodeArena({ studies }) {
-  const { list, update: setCh, add, remove } = useSessions('challenges', studies)
+// scope: GENERAL = the generic Code page; a study id = inside that study's workspace
+export default function CodeArena({ studies, scope = GENERAL, bar = 'code' }) {
+  const { list, update: setCh, add, remove } = useSessions('challenges', studies, scope)
   const [sel, setSel] = useState(null) // null = cards, 'new' = hero, id = arena
   const [busy, setBusy] = useState(false)
   const active = list?.find(c => c.id === sel && c.statement)
-  const start = async ({ studyId, ...opts }) => {
-    setBusy(true); const c = await api.post(`/api/studies/${studyId}/challenge`, opts); setBusy(false)
-    if (c.error) return alert(c.error); add(c, studyId); setSel(c.id)
+  const start = async opts => {
+    setBusy(true); const c = await api.post(`/api/studies/${scope}/challenge`, opts); setBusy(false)
+    if (c.error) return alert(c.error); add(c, scope); setSel(c.id)
   }
   const del = async c => {
     if (!await ask({ title: `Delete «${c.title}»?`, body: 'The challenge, your code, the coach chat and the timer are removed.', ok: 'Delete' })) return
@@ -214,10 +214,10 @@ export default function CodeArena({ studies }) {
       `}</style>
   )
   if (!list) return <div className="h-full grid place-items-center text-xs text-dim">Loading…</div>
-  if (active) return <>{css}<Arena key={active.id} study={{ id: active.studyId }} ch={active} setCh={setCh} onBack={() => setSel(null)} onNext={c => { add(c, active.studyId); setSel(c.id) }} /></>
+  if (active) return <>{css}<Arena key={active.id} study={{ id: scope }} ch={active} setCh={setCh} onBack={() => setSel(null)} onNext={c => { add(c, scope); setSel(c.id) }} bar={bar} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered>
     {list.length > 0 && <button onClick={() => setSel(null)} className="btn-ghost text-xs inline-flex items-center gap-1 mb-2"><Ico d={<path d="m15 18-6-6 6-6"/>} />Back to challenges</button>}
-    <Hero busy={busy} onStart={start} studies={studies} />
+    <Hero busy={busy} onStart={start} general={scope === GENERAL} />
   </Centered></>
   return <>{css}<Grid onNew={() => setSel('new')} newLabel="New challenge">{list.map(c => <Card key={c.id} c={c} onOpen={() => setSel(c.id)} onDelete={() => del(c)} />)}</Grid></>
 }

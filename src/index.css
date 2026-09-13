@@ -840,5 +840,4 @@
 .q-out span { color: rgb(var(--c-success)); }
 .q-out pre { border-left-color: rgb(var(--c-success)); }
 .q-explain { font-size: .75rem; font-style: italic; color: rgb(var(--c-dim)); margin: .45rem 0 0; }
-/* one top bar: when a detail view fills its tool's slot in the app header, the plain page title steps aside */
-.app-bar:has(.bar-slot:not(.hidden):not(:empty)) .app-title { display: none; }
+/* one top bar: a detail view fills its tool's slot in the app header after the section crumb (home › section › item) */

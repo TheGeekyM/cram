@@ -593,7 +593,15 @@ function SlashMenu({ at, items, active, onPick }) {
   )
 }
 
-export default function NotesScreen({ project, onBack, onHome }) {
+// Notes tagged with a study, plus every page filed under one of them (a study's workspace shows only these)
+const inStudy = (notes, sid) => {
+  const ids = new Set(notes.filter(n => n.studyId === sid).map(n => n.id))
+  for (let grew = true; grew;) { grew = false; for (const n of notes) if (!ids.has(n.id) && ids.has(n.parent)) { ids.add(n.id); grew = true } }
+  return notes.filter(n => ids.has(n.id))
+}
+
+// studyId + embedded: the Notes tool inside a study's workspace (filtered list, new notes tagged, no page chrome)
+export default function NotesScreen({ project, onHome, studyId, embedded }) {
   const [notes, setNotes]     = useState([])
   const [query, setQuery]     = useState('')      // filters titles and note text
   const [rowMenu, setRowMenu] = useState(null)    // { at:{x,y}, note } — right-click on a row
@@ -725,7 +733,8 @@ export default function NotesScreen({ project, onBack, onHome }) {
     window.api.notes.list(project.id, empties).then(r => {
       if (!r.ok) return
       setNotes(r.notes)
-      if (r.notes[0]) open(r.notes[0])
+      const first = studyId ? inStudy(r.notes, studyId)[0] : r.notes[0]
+      if (first) open(first)
       localStorage.removeItem('notesFolders:empty')
     })
     return () => clearTimeout(saveTimer.current)
@@ -812,7 +821,7 @@ export default function NotesScreen({ project, onBack, onHome }) {
   }
 
   function newNote(parent = '') {
-    const note = { id: uid(), title: '', content: '', parent }
+    const note = { id: uid(), title: '', content: '', parent, ...(studyId ? { studyId } : {}) }
     setNotes(prev => [{ ...note, updatedAt: Date.now() }, ...prev])
     setActiveId(note.id); setTitle('')
     editor?.commands.setContent('', { emitUpdate: false })
@@ -878,9 +887,10 @@ export default function NotesScreen({ project, onBack, onHome }) {
   }
 
   const nq = query.trim().toLowerCase()
+  const scoped = studyId ? inStudy(notes, studyId) : notes
   const visibleNotes = nq
-    ? notes.filter(n => (n.title || '').toLowerCase().includes(nq) || snippetFull(n.content).includes(nq))
-    : notes
+    ? scoped.filter(n => (n.title || '').toLowerCase().includes(nq) || snippetFull(n.content).includes(nq))
+    : scoped
 
   // A page cannot be moved under itself or under anything below it, so those are not offered.
   const parentChoices = (n) => notes.filter(x => x.id !== n.id && x.id !== (n.parent || '') && !isDescendant(notes, x.id, n.id))
@@ -953,8 +963,8 @@ export default function NotesScreen({ project, onBack, onHome }) {
   })
 
   return (
-    <div className="h-screen bg-app flex flex-col overflow-hidden">
-      <NavBar title="Notes" project={project} onHome={onHome} onDashboard={onBack} />
+    <div className={`${embedded ? 'h-full' : 'h-screen'} bg-app flex flex-col overflow-hidden`}>
+      {!embedded && <NavBar title="Notes" onHome={onHome} />}
 
       <div className="flex-1 flex overflow-hidden bg-app p-2.5 gap-2.5">
         {/* Note list — drag its right edge to resize, double-click it to collapse */}
@@ -965,7 +975,7 @@ export default function NotesScreen({ project, onBack, onHome }) {
             <button onClick={() => newNote()} title="New note"
               className="w-7 h-7 flex items-center justify-center rounded-md bg-accent/15 text-accent hover:bg-accent hover:text-app transition-colors text-base leading-none flex-shrink-0">+</button>
             <div className="flex-1 overflow-y-auto flex flex-col items-center gap-1 w-full pt-1">
-              {notes.map(n => (
+              {scoped.map(n => (
                 <button key={n.id} onClick={() => open(n)} title={n.title?.trim() || 'Untitled'}
                   className={`w-7 h-7 rounded-md grid place-items-center text-[11px] font-semibold flex-shrink-0 border transition-colors ${
                     activeId === n.id ? 'bg-accent/15 border-accent/40 text-white' : 'border-transparent text-dim hover:bg-white/5'
@@ -1021,8 +1031,8 @@ export default function NotesScreen({ project, onBack, onHome }) {
               if (note) { reparent(note, ''); moveNote(from, null) }
               dragRef.current = null; setDragId(null); setDropId(null)
             }}>
-            {notes.length === 0 ? (
-              <div className="text-center text-dim text-xs py-8 px-3">No notes yet. Click + to create one.</div>
+            {scoped.length === 0 ? (
+              <div className="text-center text-dim text-xs py-8 px-3">{studyId ? 'No notes in this study yet. Click + to create one.' : 'No notes yet. Click + to create one.'}</div>
             ) : visibleNotes.length === 0 ? (
               <div className="text-center text-dim text-xs py-8 px-3">Nothing matches “{query}”.</div>
             ) : rows(nq ? visibleNotes : childrenOf(visibleNotes, null), 0)}

@@ -7,15 +7,17 @@ import { api } from '../api.js'
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 export const Trash = <><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></>
 
-export const Centered = ({ children }) => (
-  <div className="h-full overflow-y-auto flex items-center justify-center p-2"><div className="w-full max-w-[640px] my-auto">{children}</div></div>
+export const Centered = ({ children, wide }) => (
+  <div className="h-full overflow-y-auto flex items-center justify-center p-2"><div className={`w-full ${wide ? 'max-w-[820px]' : 'max-w-[640px]'} my-auto`}>{children}</div></div>
 )
 
 // ---------- cross-study grid tools (Quiz / Interview / Code) ----------
 // rows come from GET /api/<kind> with studyId + studyTitle; per-row responses lack those, so update() merges.
-export function useSessions(kind, studies) {
+// `scope` is the one study whose sessions to show: a study's id inside its workspace, GENERAL on the generic pages.
+export const GENERAL = '_general'
+export function useSessions(kind, studies, scope = GENERAL) {
   const [list, setList] = useState(null)
-  useEffect(() => { api.get(`/api/${kind}`).then(r => Array.isArray(r) ? setList(r) : (alert(r.error || `Could not load ${kind}. Is the server up to date?`), setList([]))).catch(() => setList([])) }, [kind])
+  useEffect(() => { api.get(`/api/${kind}`).then(r => Array.isArray(r) ? setList(r.filter(x => x.studyId === scope)) : (alert(r.error || `Could not load ${kind}. Is the server up to date?`), setList([]))).catch(() => setList([])) }, [kind, scope])
   return {
     list,
     update: it => setList(l => l.map(x => x.id === it.id ? { ...x, ...it } : x)),
@@ -29,10 +31,16 @@ export const StudySelect = ({ studies, value, onChange }) => (
   </select>
 )
 // A detail view's top bar, rendered inside the app header (App.jsx keeps one slot per tool) so there is one bar, not two
-export function PageBar({ tool, children }) {
+// The section crumb in the app header (e.g. "Interview") is the way back: App fires 'cram:back' with the tool name.
+export function PageBar({ tool, onBack, children }) {
   const [el, setEl] = useState(null)
   useEffect(() => setEl(document.getElementById(`bar-${tool}`)), [tool])
-  return el && createPortal(<div className="flex-1 min-w-0 flex items-center gap-3">{children}</div>, el)
+  useEffect(() => {
+    if (!onBack) return
+    const f = e => e.detail === tool && onBack()
+    window.addEventListener('cram:back', f); return () => window.removeEventListener('cram:back', f)
+  }, [tool, onBack])
+  return el && createPortal(<div className="flex-1 min-w-0 flex items-center gap-3 pl-1.5">{children}</div>, el) // pl-1.5 = a crumb's own padding, so both sides of › match
 }
 
 export const BackBtn = ({ onClick, title = 'Back' }) => <button onClick={onClick} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0" title={title}><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>
@@ -57,7 +65,7 @@ export function Tile({ dot, title, sub, badge, study, children, action, onDelete
         <span className="text-base font-semibold text-white truncate" title={title}>{title}</span>{sub && <span className="text-sm text-dim whitespace-nowrap">· {sub}</span>}
         <span className="ml-auto flex-shrink-0">{badge}</span>
       </div>
-      <div className="text-xs text-dim truncate -mt-2" title={study}>{study}</div>
+      {study && <div className="text-xs text-dim truncate -mt-2" title={study}>{study}</div>}
       {children}
       {action}
       <button onClick={onDelete} className="absolute top-2 right-2 w-6 h-6 rounded text-dim opacity-0 group-hover:opacity-100 hover:text-error hover:bg-white/5 grid place-items-center" title="Delete"><Ico d={Trash} /></button>

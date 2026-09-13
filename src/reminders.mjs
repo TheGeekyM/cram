@@ -1,14 +1,5 @@
-// Study reminders set by the learner: a time, days of the week and a label. They fire while Cram is running
-// (in-app alert + desktop notification + chime). Stored in localStorage: one user, one machine.
-// ponytail: app must be open; the cron-based daily nudge in Settings covers the closed-app case.
-const KEY = 'cram:reminders', FIRED = 'cram:reminders-fired'
-const read = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } }
-const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} }
-export const load = () => read(KEY, [])
-export const save = list => { write(KEY, list); window.dispatchEvent(new Event('cram:reminders')) }
-export const loadFired = () => read(FIRED, {})
-export const saveFired = f => write(FIRED, f)
-
+// Timing rules for study reminders (a time, days of the week and a label). Pure functions shared by the app
+// (src/components/Reminders.jsx) and the closed-app job (remind.js --custom). Storage lives on the server.
 const pad = n => String(n).padStart(2, '0')
 export const dayKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 // A reminder is due when it is on, today is one of its days, its time has passed within the last GRACE minutes
@@ -24,11 +15,16 @@ export function due(r, now, fired = {}) {
   const late = (now - at) / 6e4
   return late >= 0 && late < GRACE && fired[r.id] !== dayKey(now)
 }
-// next time a reminder will fire, for the settings list
-export function nextAt(r, now = new Date()) {
+// next time a reminder will fire, for the settings list. Inside the grace window and not yet fired, that is today's time.
+export function nextAt(r, now = new Date(), fired = {}) {
   if (!r.on || !r.days?.length) return null
   if (r.snoozeUntil) return new Date(r.snoozeUntil)
-  const [h, m] = r.time.split(':').map(Number)
-  for (let i = 0; i < 8; i++) { const d = new Date(now); d.setDate(d.getDate() + i); d.setHours(h, m, 0, 0); if (r.days.includes(d.getDay()) && d > now) return d }
+  const [h, m] = String(r.time || '').split(':').map(Number); if (Number.isNaN(h) || Number.isNaN(m)) return null
+  for (let i = 0; i < 8; i++) {
+    const d = new Date(now); d.setDate(d.getDate() + i); d.setHours(h, m, 0, 0)
+    if (!r.days.includes(d.getDay())) continue
+    if (d > now) return d
+    if (i === 0 && (now - d) / 6e4 < GRACE && fired[r.id] !== dayKey(now)) return d
+  }
   return null
 }

@@ -43,6 +43,7 @@ app.whenReady().then(() => {
     win.webContents.on('before-input-event', (e, input) => {
       if (input.type === 'keyDown' && (input.control || input.meta) && keys[input.code] && !input.shift) { e.preventDefault(); win.webContents[keys[input.code]](); }
     });
+    win.webContents.session.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media')); // the mic, for spoken interview answers
     win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
   });
 });
