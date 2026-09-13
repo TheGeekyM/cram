@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api.js'
 import { isRtl } from '../voice.js'
 import StudyScreen from './StudyScreen.jsx'
@@ -86,6 +87,7 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
   const one = [{ id: study.id, title: study.title }]
   const [srcJump, setSrcJump] = useState(null); const [prefill, setPrefill] = useState(null); const [openIv, setOpenIv] = useState(null)
   const pick = id => { setOpenIv(null); setTool(id) }
+  const [side, setSide] = useState(null); useEffect(() => setSide(document.getElementById('ws-side')), []) // App's slot beside the page island
   return (
     <div className="h-full flex min-h-0">
       <div className="flex-1 min-w-0 min-h-0">
@@ -98,7 +100,7 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
         {tool === 'review' && <Review studies={one} scope={study.id} bar="study" onChanged={onChanged} />}
         {tool === 'coach' && <div className="h-full px-2.5 pb-2.5"><StudyCoach studyId={study.id} bar="study" onBack={() => setTool('chat')} /></div>}
       </div>
-      <aside className="island w-56 flex-shrink-0 my-2.5 mr-2.5 flex flex-col p-2 gap-0.5 overflow-y-auto">
+      {side && createPortal(<aside className="island w-56 flex-shrink-0 flex flex-col p-2 gap-0.5 overflow-y-auto">
         <div className="px-2.5 pt-2 pb-3">
           <div className="text-sm font-semibold text-white truncate" dir="auto" title={study.title}>{study.title}</div>
           <div className="text-[11px] text-dim truncate" dir="auto">{study.subject || (study.hasPdf ? 'From a PDF' : 'Study')}{study.hasPdf && study.subject ? ' · PDF' : ''}</div>
@@ -110,7 +112,7 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
             <span className="min-w-0"><span className="block text-sm">{label}</span><span className="block text-[11px] text-dim truncate">{sub}</span></span>
           </button>
         ))}
-      </aside>
+      </aside>, side)}
     </div>
   )
 }

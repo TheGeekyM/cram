@@ -167,6 +167,7 @@ export default function App() {
           {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} /></div>}
         </div>
       </div>
+      <div id="ws-side" className={page === 'study' && study ? 'contents' : 'hidden'} />{/* the study tools card lands here: its own island beside the page, like the main sidebar */}
       <ConfirmHost />
       <ReminderHost />
       {palette && <Palette entries={ENTRIES} studies={studies} onClose={() => setPalette(false)} onGo={id => { setPalette(false); go(id) }} onStudy={sid => { setPalette(false); openTool(sid, 'study') }} />}
