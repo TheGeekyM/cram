@@ -299,7 +299,7 @@ function Session({ study, iv, setIv, onBack }) {
           <div className="font-mono text-base text-white tabular-nums flex items-center gap-1.5">{fmt(elapsed)}{open && <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />}</div>
           <div className={`text-[10px] uppercase tracking-wider ${open ? 'text-accent' : 'text-dim'}`}>{open ? 'running' : 'ended'}</div>
         </div>
-        <button onClick={toggleSpeak} className={`btn-tint ${speakOn ? 'btn-purple' : ''}`} title="Read each question aloud"><Ico d={<><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></>} />{speakOn ? 'Reading aloud' : 'Read aloud'}</button>
+        {open && <button onClick={toggleSpeak} className={`btn-tint ${speakOn ? 'btn-purple' : ''}`} title="Read each question aloud"><Ico d={<><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></>} />{speakOn ? 'Reading aloud' : 'Read aloud'}</button>}
         {open ? <button onClick={end} className="btn-tint btn-red" disabled={busy}><Ico d={<rect x="6" y="6" width="12" height="12" rx="2"/>} />End</button>
           : <button onClick={() => setStatus('open')} className="btn-tint btn-green"><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Resume</button>}
       </div>
