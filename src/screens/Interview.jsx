@@ -50,6 +50,19 @@ function Hero({ busy, onStart, studies }) {
   )
 }
 
+// one shared player; `token` drops audio that arrives after a newer request or a stop
+const player = new Audio(); let token = 0
+function stopSpeech() { token++; player.pause(); fetch('/api/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"stop":true}' }).catch(() => {}) }
+async function playSpeech(text, lang) {
+  const my = ++token; player.pause()
+  try {
+    const r = await fetch('/api/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, lang }) })
+    if (my !== token || !r.headers.get('content-type')?.startsWith('audio/')) return
+    const blob = await r.blob(); if (my !== token) return
+    URL.revokeObjectURL(player.src); player.src = URL.createObjectURL(blob); await player.play()
+  } catch (e) { if (e.name !== 'AbortError') console.warn('read aloud failed', e) }
+}
+
 // ---------- grid card: stats + Continue (open) / Show (ended) ----------
 function Card({ iv, onOpen, onDelete }) {
   const { n, ok, avg } = stats(iv); const open = iv.status === 'open'
@@ -283,13 +296,13 @@ function Session({ study, iv, setIv, onBack }) {
   const setStatus = status => { api.post(base, { status, elapsed }); setIv({ ...iv, status, elapsed }) }
   const end = async () => { if (await ask({ title: 'End this interview?', body: 'You can resume it any time from the list. Your answers and score are kept.', ok: 'End interview' })) { setStatus('ended'); setFb(null) } }
   const q = iv.pending
-  // read aloud via the server (speech-dispatcher); Electron's own speech APIs have no voices or mic access here
+  // read aloud: the server returns neural-voice MP3 (or plays espeak itself when offline); Electron's own speech APIs have no voices here
   const [speakOn, setSpeakOn] = useState(() => localStorage.getItem('cram:read-aloud') === '1')
-  const speak = t => api.post('/api/speak', { text: t, lang: iv.language })
+  const speak = t => playSpeech(t, iv.language)
   const sayQ = x => speak([x.q, ...(x.choices || []).map((c, j) => `${'ABCD'[j]}. ${c}`)].join('. '))
   useEffect(() => { if (speakOn && open && q && !fb && !preparing) sayQ(q) }, [q?.q, speakOn, preparing]) // eslint-disable-line
-  useEffect(() => () => { api.post('/api/speak', { stop: true }) }, [])
-  const toggleSpeak = () => { const v = !speakOn; setSpeakOn(v); localStorage.setItem('cram:read-aloud', v ? '1' : '0'); if (!v) api.post('/api/speak', { stop: true }) }
+  useEffect(() => stopSpeech, [])
+  const toggleSpeak = () => { const v = !speakOn; setSpeakOn(v); localStorage.setItem('cram:read-aloud', v ? '1' : '0'); if (!v) stopSpeech() }
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
       <div className="island px-3 py-2 flex items-center gap-3 flex-shrink-0">

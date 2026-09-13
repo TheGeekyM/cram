@@ -167,15 +167,37 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ---------- read aloud through speech-dispatcher (Electron's Web Speech has no voices on Linux) ----------
+  // ---------- read aloud: Microsoft Edge neural voices (online, human-like), espeak through speech-dispatcher when offline ----------
+  // ponytail: msedge-tts uses Edge's unofficial read-aloud endpoint; if Microsoft changes it, the espeak fallback keeps working
+  const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
+  const VOICES = { ar: 'ar-SA-ZariyahNeural', en: 'en-US-AvaMultilingualNeural' };
   const spdEnv = { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}` };
   const hasSpd = ['/usr/bin/spd-say', '/usr/local/bin/spd-say'].some(f => fs.existsSync(f));
-  app.get('/api/speak', (req, res) => res.json({ available: hasSpd }));
-  app.post('/api/speak', (req, res) => {
-    if (!hasSpd) return res.status(400).json({ error: 'Read-aloud needs speech-dispatcher (spd-say).' });
+  async function neural(text, lang) {
+    const tts = new MsEdgeTTS();
+    try {
+      await tts.setMetadata(VOICES[lang], OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      const { audioStream } = tts.toStream(text), chunks = [];
+      const timer = setTimeout(() => audioStream.destroy(new Error('voice service timed out')), 15000);
+      try { for await (const c of audioStream) chunks.push(c); } finally { clearTimeout(timer); }
+      if (!chunks.length) throw new Error('voice service returned no audio');
+      return Buffer.concat(chunks);
+    } finally { try { tts.close(); } catch {} }
+  }
+  app.get('/api/speak', (req, res) => res.json({ available: true }));
+  app.post('/api/speak', async (req, res) => {
+    execFile('spd-say', ['-C'], { env: spdEnv }, () => {});
     const text = String(req.body?.text || '').slice(0, 4000), lang = /arab/i.test(req.body?.lang || '') || /[\u0600-\u06FF]/.test(text) ? 'ar' : 'en';
-    execFile('spd-say', ['-C'], { env: spdEnv }, () => { if (text && !req.body?.stop) execFile('spd-say', ['-o', 'espeak-ng', '-l', lang, '-r', '-15', text], { env: spdEnv }, () => {}); });
-    res.json({ ok: true });
+    if (!text || req.body?.stop) return res.json({ ok: true });
+    try {
+      const t0 = Date.now(), mp3 = await neural(text, lang); console.log(`[speak] ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
+      res.type('audio/mpeg').send(mp3);
+    } catch (e) {
+      console.warn('[speak] neural voice failed, using espeak:', e.message);
+      if (!hasSpd) return res.status(502).json({ error: `Read-aloud is unavailable: ${e.message}` });
+      execFile('spd-say', ['-o', 'espeak-ng', '-l', lang, '-r', '-15', text], { env: spdEnv }, () => {});
+      res.json({ ok: true, fallback: 'espeak' });
+    }
   });
 
   // ---------- offline reminder: an hourly cron entry runs remind.js, which notifies at most once a day ----------
