@@ -54,6 +54,13 @@
       "main.js",
       "server.js",
       "auth.js",
+      "cli.js",
+      "features.js",
+      "jsonish.js",
+      "linkcheck.js",
+      "remind.js",
+      "reminderStore.js",
+      "stt.py",
       "dist/**",
       "build/icon.png"
     ],
@@ -67,6 +74,7 @@
       ],
       "icon": "build/icon.png",
       "category": "Education"
-    }
+    },
+    "icon": "build/icon.png"
   }
 }
