@@ -226,9 +226,14 @@ app.post('/api/show-in-folder', (req, res) => { app.showInFolder?.(req.body.path
 app.post('/api/studies/:id/chat', async (req, res) => {
   const s = study(req.params.id);
   s.chat.push({ role: 'user', content: req.body.message });
-  const text = await streamText(res, s, s.chat, s.hasPdf ? { system: `${context(s).system}\n\nWhen part of an answer comes from the PDF, cite the page inline as (p. N), using the PDF's page number.` } : undefined);
-  s.chat.push({ role: 'assistant', content: text || '*(stopped)*' }); touch(s); // never store an empty turn: the API rejects empty content
+  const system = `${context(s).system}${s.hasPdf ? `\n\nWhen part of an answer comes from the PDF, cite the page inline as (p. N), using the PDF's page number.` : ''}${NEXT_RULE}`;
+  const text = await streamText(res, s, s.chat.map(({ role, content }) => ({ role, content })), { system }); // the API rejects extra fields such as `next`
+  const { body, next } = nextOf(text);
+  s.chat.push({ role: 'assistant', content: body || '*(stopped)*', ...(next.length ? { next } : {}) }); touch(s); // never store an empty turn: the API rejects empty content
 });
+// helper questions: every answer ends with a <next> list that moves the learner forward; the client shows it as chips
+const NEXT_RULE = `\n\nEnd every answer with 3 short follow-up questions (each under 12 words) the learner could ask next to go deeper or move on to the next step in this material, written in the language the learner is using. Put them last, in exactly this form:\n<next>\n- question\n- question\n- question\n</next>`;
+const nextOf = (t = '') => { const m = /<next>([\s\S]*?)(?:<\/next>|$)/.exec(t); return { body: t.replace(/\s*<next>[\s\S]*$/, '').trim(), next: m ? m[1].split('\n').map(l => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean).slice(0, 4) : [] }; };
 // ---------- the study's PDF and its chapter list ----------
 app.get('/api/studies/:id/source.pdf', (req, res) => { const f = path.join(STUDIES, path.basename(req.params.id), 'source.pdf'); if (fs.existsSync(f)) res.sendFile(f, { dotfiles: 'allow' }); else /* the data folder lives under ~/.config, which send refuses by default */ res.status(404).end(); });
 // PDF bookmarks via mutool: lines like `+\t\t"Binary search"\t#page=22&zoom=…`, one tab per level
@@ -250,6 +255,16 @@ app.get('/api/studies/:id/outline', async (req, res) => {
       items = (r.items || []).filter(x => x.title && +x.page > 0).map(x => ({ title: String(x.title).slice(0, 200), page: Math.round(+x.page), depth: Math.min(2, Math.max(0, Math.round(+x.depth) || 0)) }));
     }
     const s2 = study(s.id); s2.outline = { at: Date.now(), from, items }; save(s2); res.json(s2.outline);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// starter helper questions for an empty chat, made once per study
+app.get('/api/studies/:id/starters', async (req, res) => {
+  let s; try { s = study(path.basename(req.params.id)); } catch { return res.status(404).json({ error: 'no such study' }); }
+  if (s.starters?.length) return res.json(s.starters);
+  const toc = (s.outline?.items || []).filter(i => !i.depth).map(i => i.title).slice(0, 30).join('; ');
+  try {
+    const r = await json(s, `Suggest 4 short questions (each under 12 words) a learner could ask first to get started with this ${s.hasPdf ? 'material' : 'subject'}: start from the basics and end with one that goes deeper.${toc ? ` Its chapters: ${toc}.` : ''} Write them in the language of the material. Respond with ONLY JSON: {"questions": [string]}`);
+    const s2 = study(s.id); s2.starters = (r.questions || []).map(q => String(q).trim()).filter(Boolean).slice(0, 4); save(s2); res.json(s2.starters);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/studies/:id/chat',(req, res) => { const s = study(req.params.id); s.chat = []; touch(s); res.json({ ok: true }); });

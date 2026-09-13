@@ -20,7 +20,10 @@ const MIC = <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><p
 const SPEAK = <><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></>
 
 // ---------- chat surface ----------
-function Chat({ msgs, onSend, onStop, busy, placeholder, empty, right, onCite }) {
+// an answer ends with a <next> list of helper questions: shown as chips, never as text (a half-streamed tag is hidden too)
+const nextOf = (t = '') => { const m = /<next>([\s\S]*?)(?:<\/next>|$)/.exec(t); return { body: t.replace(/\s*<next>[\s\S]*$/, '').replace(/<(n(e(x(t)?)?)?)?$/, '').trim(), next: m ? m[1].split('\n').map(l => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean).slice(0, 4) : [] } }
+
+function Chat({ msgs, onSend, onStop, busy, placeholder, empty, right, onCite, helpers }) {
   const [text, setText] = useState(''); const [micErr, setMicErr] = useState(''); const end = useRef()
   const mic = useMic({ lang: 'auto', onText: t => { setText(x => (x ? `${x} ${t}` : t)); setMicErr('') }, onError: setMicErr }) // dictation: fills the box, you send
   useEffect(() => { end.current?.scrollIntoView({ block: 'end' }) }, [msgs])
@@ -36,6 +39,12 @@ function Chat({ msgs, onSend, onStop, busy, placeholder, empty, right, onCite })
         ))}
         <div ref={end} />
       </div>
+      {!busy && helpers?.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-2.5">{helpers.map(h => (
+          <button key={h} dir="auto" onClick={() => { mic.stop(); onSend(h) }} title="Ask this"
+            className="text-xs text-start px-2.5 py-1 rounded-full border border-accent/30 bg-accent/5 text-gray-300 hover:bg-accent/15 hover:text-white transition-colors">{h}</button>
+        ))}</div>
+      )}
       {micErr && <div className="text-[11px] text-error pt-1.5">{micErr}</div>}
       <div className="flex gap-2 pt-2.5 items-end">
         <button onClick={() => (mic.on ? mic.stop() : (stopSpeech(), mic.start()))} title={mic.on ? 'Stop dictating' : 'Dictate by voice'} aria-label={mic.on ? 'Stop dictating' : 'Dictate by voice'}
@@ -63,15 +72,19 @@ function Ask({ study, setStudy, onCite, prefill, onPrefillUsed }) {
   const msgs = live ? [...study.chat, ...live] : study.chat
   const send = async q => {
     stopSpeech(); setBusy(true); setLive([{ role: 'user', content: q }, { role: 'assistant', content: '' }]); ctrl.current = new AbortController()
-    const text = await api.stream(`/api/studies/${study.id}/chat`, { message: q }, t => setLive([{ role: 'user', content: q }, { role: 'assistant', content: t }]), ctrl.current.signal)
-    setStudy(s => ({ ...s, chat: [...s.chat, { role: 'user', content: q }, { role: 'assistant', content: text || '*(stopped)*' }] })); setLive(null); setBusy(false); ctrl.current = null
+    const raw = await api.stream(`/api/studies/${study.id}/chat`, { message: q }, t => setLive([{ role: 'user', content: q }, { role: 'assistant', content: nextOf(t).body }]), ctrl.current.signal)
+    const { body: text, next } = nextOf(raw)
+    setStudy(s => ({ ...s, chat: [...s.chat, { role: 'user', content: q }, { role: 'assistant', content: text || '*(stopped)*', ...(next.length ? { next } : {}) }] })); setLive(null); setBusy(false); ctrl.current = null
     if (voiceRef.current && text && !ctrl.current) speak(plain(text).slice(0, 1500), isRtl(text) ? 'Arabic' : 'English') // ponytail: long answers are read up to ~1500 characters
   }
   useEffect(() => { if (prefill?.text) { onPrefillUsed?.(); send(prefill.text) } }, [prefill?.n]) // eslint-disable-line -- "Ask" on a chapter
   useEffect(() => () => stopSpeech(), [])
+  const [starters, setStarters] = useState([]); const fresh = !study.chat.length
+  useEffect(() => { if (fresh && !starters.length) api.get(`/api/studies/${study.id}/starters`).then(r => Array.isArray(r) && setStarters(r)) }, [study.id, fresh]) // eslint-disable-line
+  const helpers = fresh ? starters : study.chat.at(-1)?.next || []
   const toggleVoice = () => { const v = !voice; setVoice(v); localStorage.setItem('cram:chat-voice', v ? '1' : '0'); if (!v) stopSpeech() }
   const clear = async () => { if (!await ask({ title: 'Clear this chat?', body: 'Every question and answer in this study\'s chat is removed. The material and your notes stay.', ok: 'Clear chat' })) return; await api.del(`/api/studies/${study.id}/chat`); setStudy(s => ({ ...s, chat: [] })) }
-  return <Chat msgs={msgs} onSend={send} onStop={() => ctrl.current?.abort()} busy={busy} placeholder="Ask anything about the material… (Enter to send)" empty="Answers come from the material first, then general knowledge." onCite={onCite}
+  return <Chat msgs={msgs} onSend={send} onStop={() => ctrl.current?.abort()} busy={busy} helpers={helpers} placeholder="Ask anything about the material… (Enter to send)" empty="Answers come from the material first, then general knowledge." onCite={onCite}
     right={<><button className={`btn-tint ${voice ? 'btn-purple' : ''}`} onClick={toggleVoice} title="Read each answer aloud"><Ico d={SPEAK} />{voice ? 'Reading answers' : 'Read answers'}</button><button className="btn-tint btn-red" onClick={clear}>Clear</button></>} />
 }
 
