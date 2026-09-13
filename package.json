@@ -61,6 +61,8 @@
       "remind.js",
       "reminderStore.js",
       "stt.py",
+      "src/core/notesTree.mjs",
+      "src/reminders.mjs",
       "dist/**",
       "build/icon.png"
     ],
