@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import Markdown from '../components/Markdown.jsx'
+import hljs from 'highlight.js/lib/common'
+import 'highlight.js/styles/github-dark.css'
 import { api } from '../api.js'
 import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
-import { Centered, useSessions, StudySelect, BackBtn, Grid, Tile, Stats } from '../components/SessionList.jsx'
+import { Centered, useSessions, StudySelect, BackBtn, PageBar, Grid, Tile, Stats } from '../components/SessionList.jsx'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
@@ -129,20 +131,27 @@ function Arena({ study, ch, setCh, onBack, onNext }) {
   useEffect(() => { const t = setTimeout(() => code !== ch.code && api.post(base, { code }), 800); return () => clearTimeout(t) }, [code]) // eslint-disable-line
   const ref = useRef(); ref.current = { elapsed, code, ch }
   useEffect(() => () => { const { elapsed, code, ch } = ref.current; if (ch.status === 'open') { api.post(base, { elapsed, code }); setCh({ ...ch, elapsed, code }) } }, []) // eslint-disable-line -- keep timer + code when switching away
+  const [panel, setPanel] = useState(null); const reviewCtl = useRef() // 'tests' | 'review' | null
+  const closePanel = () => { reviewCtl.current?.abort(); setPanel(null) }
   const run = async () => {
-    setRunning(true); const r = await api.post('/api/run', { language: ch.language, code, tests: ch.tests }); setRunning(false); if (r.error) return alert(r.error)
+    closePanel(); setPanel('tests'); setRunning(true); const r = await api.post('/api/run', { language: ch.language, code, tests: ch.tests }); setRunning(false); if (r.error) return alert(r.error)
     setRes(r); const solved = r.passed === r.results.length
     patch({ code, elapsed, passed: r.passed, ...(solved && ch.status === 'open' ? { status: 'solved' } : {}) })
   }
-  const getReview = async () => { setReviewing(true); setReview(''); await api.stream(`${base}/review`, { code, results: res }, setReview); setReviewing(false) }
+  const getReview = async () => { closePanel(); setPanel('review'); const c = reviewCtl.current = new AbortController(); setReviewing(true); setReview(''); await api.stream(`${base}/review`, { code, results: res }, setReview, c.signal); setReviewing(false) }
   const [nexting, setNexting] = useState(false)
   const next = async () => { setNexting(true); const n = await api.post(`${base}/next`, { code, results: res }); setNexting(false); if (n.error) return alert(n.error); onNext(n) }
   const cleared = ch.status === 'solved' || (res && res.passed === res.results.length)
   const giveUp = async () => { if (await ask({ title: 'Give up on this one?', body: 'The timer stops and the challenge stays in your list as given up. You can still ask the coach or get a review.', ok: 'Give up' })) patch({ status: 'given-up', elapsed, code }) }
+  const hl = useRef(), qRef = useRef()
+  // colour fenced code in the question with the challenge's language (Markdown renders plain <pre><code>)
+  useEffect(() => { qRef.current?.querySelectorAll('pre code:not(.hljs)').forEach(el => { el.innerHTML = hljs.highlight(el.textContent, { language: hljs.getLanguage(ch.language) ? ch.language : 'plaintext', ignoreIllegals: true }).value; el.classList.add('hljs') }) }, [ch.statement, ch.language])
+  // ponytail: re-highlights the whole file per keystroke; fine for challenge-sized code, a real editor (CodeMirror) if files get large
+  const painted = useMemo(() => hljs.highlight(code + '\n', { language: hljs.getLanguage(ch.language) ? ch.language : 'plaintext', ignoreIllegals: true }).value, [code, ch.language])
   const tab = e => { if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; setCode(code.slice(0, s) + '    ' + code.slice(t.selectionEnd)); requestAnimationFrame(() => t.selectionStart = t.selectionEnd = s + 4) } }
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
-      <div className="island px-3 py-2 flex items-center gap-3 flex-shrink-0">
+      <PageBar tool="code">
         <BackBtn onClick={onBack} title="Back to challenges" />
         <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white truncate">{ch.title}</div><div className="text-[11px] text-dim"><span className="capitalize">{ch.difficulty}</span> · {langOf(ch.language)[1]} · {ch.tests.length} tests</div></div>
         {res && <span className={`badge ${res.passed === res.results.length ? 'badge-green' : 'badge-red'}`}>{res.passed} / {res.results.length}</span>}
@@ -150,27 +159,31 @@ function Arena({ study, ch, setCh, onBack, onNext }) {
         {ch.status === 'open' && <button onClick={giveUp} className="btn-tint btn-red">Give up</button>}
         {(ch.status !== 'open' || res) && <button onClick={next} disabled={nexting} className="btn-tint btn-green" title={cleared ? 'A harder challenge on the same concept' : 'A smaller challenge that isolates what is failing'}>{nexting ? <Wait label="Building…" /> : <>{cleared ? 'Next: harder' : 'Next: focused practice'}<Ico d={<path d="m9 18 6-6-6-6"/>} /></>}</button>}
         <button onClick={() => setShowCoach(v => !v)} className={`btn-tint ${showCoach ? 'btn-purple' : ''}`} title="Toggle coach"><Ico d={<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>} />Coach</button>
-      </div>
-      <div className="flex-1 min-h-0 grid gap-2.5" style={{ gridTemplateColumns: showCoach ? 'minmax(260px,1fr) minmax(360px,1.4fr) minmax(260px,.9fr)' : 'minmax(260px,1fr) minmax(360px,1.6fr)' }}>
-        <div className="island overflow-y-auto p-4 kb-rich text-sm">
+      </PageBar>
+      <div className="flex-1 min-h-0 grid gap-2.5 pt-2.5" style={{ gridTemplateColumns: showCoach ? 'minmax(260px,1fr) minmax(360px,1.4fr) minmax(260px,.9fr)' : 'minmax(260px,1fr) minmax(360px,1.6fr)' }}>
+        <div ref={qRef} className="island overflow-y-auto p-4 kb-rich q-rich text-sm">
           <Markdown text={ch.statement} />
-          {ch.examples.map((e, i) => <div key={i} className="mt-3"><b className="text-[10px] uppercase tracking-wider text-dim">Example {i + 1}</b><pre className="mt-1">Input:{'\n'}{e.input}{'\n'}Output:{'\n'}{e.output}</pre>{e.explanation && <p className="text-xs text-dim">{e.explanation}</p>}</div>)}
+          {ch.examples.map((e, i) => <div key={i} className="q-example mt-3"><div className="q-example-title">Example {i + 1}</div><div className="q-io q-in"><span>Input</span><pre>{e.input}</pre></div><div className="q-io q-out"><span>Output</span><pre>{e.output}</pre></div>{e.explanation && <p className="q-explain">{e.explanation}</p>}</div>)}
         </div>
         <div className="island flex flex-col min-h-0 overflow-hidden">
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border text-[11px] text-dim"><span className="font-mono">solution.{langOf(ch.language)[4]}</span><span className="ml-auto">{code.split('\n').length} lines</span></div>
-          <textarea dir="ltr" className="flex-1 min-h-[220px] bg-app text-gray-100 font-mono text-[13px] leading-relaxed p-3 outline-none resize-none whitespace-pre" spellCheck={false} value={code} onChange={e => setCode(e.target.value)} onKeyDown={tab} style={{ tabSize: 4 }} />
+          <div className="relative flex-1 min-h-[220px] bg-app overflow-hidden">
+            <pre ref={hl} aria-hidden className="code-paint absolute inset-0 m-0 p-3 font-mono text-[13px] leading-relaxed whitespace-pre overflow-hidden pointer-events-none" style={{ tabSize: 4 }}><code className="hljs" dangerouslySetInnerHTML={{ __html: painted }} /></pre>
+            <textarea dir="ltr" className="code-input absolute inset-0 w-full h-full bg-transparent text-transparent caret-gray-100 font-mono text-[13px] leading-relaxed p-3 outline-none resize-none whitespace-pre selection:bg-accent/30" spellCheck={false} value={code} onChange={e => setCode(e.target.value)} onKeyDown={tab} onScroll={e => { hl.current.scrollTop = e.target.scrollTop; hl.current.scrollLeft = e.target.scrollLeft }} style={{ tabSize: 4 }} />
+          </div>
           <div className="border-t border-border p-2 flex flex-col gap-2 max-h-[45%] overflow-y-auto">
             <div className="flex items-center gap-2 flex-wrap">
-              <button className="btn btn-primary" disabled={running} onClick={run}>{running ? <Spin /> : <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} /> Run tests</>}</button>
+              <button className="btn btn-primary inline-flex items-center gap-2 pl-4 pr-1.5 py-1.5 rounded-lg whitespace-nowrap" disabled={running} onClick={run}>{running ? 'Running…' : 'Run tests'}<span className="w-6 h-6 rounded-md bg-black/15 grid place-items-center">{running ? <Spin /> : <Ico s={12} d={<path d="m7 4 12 8-12 8V4z" fill="currentColor"/>} />}</span></button>
               <button className="btn-tint btn-purple" disabled={reviewing} onClick={getReview}>Get review</button>
               <button className="btn-tint" onClick={() => setCode(ch.starter)} title="Reset to starter code">Reset</button>
             </div>
-            {res && <div className="flex flex-col gap-1">{res.results.map((r, i) => (
+            {panel === 'tests' && running && !res && <div className="text-[11px] text-dim px-0.5">Running tests…</div>}
+            {panel === 'tests' && res && <div className="flex flex-col gap-1"><div className="flex items-center gap-2 text-[11px] text-dim px-0.5"><span>Tests · <b className={res.passed === res.results.length ? 'text-success' : 'text-error'}>{res.passed} / {res.results.length}</b> passed</span><button onClick={closePanel} className="ml-auto w-6 h-6 rounded-md grid place-items-center hover:text-white hover:bg-white/5" title="Close"><Ico s={12} d={<path d="M18 6 6 18M6 6l12 12"/>} /></button></div>{res.results.map((r, i) => (
               <details key={i} className={`text-[11px] rounded-md border bg-app ${r.pass ? 'border-success/40' : 'border-error/50'}`} open={!r.pass}>
                 <summary className="px-2 py-1 cursor-pointer flex items-center gap-2"><span className={`w-1.5 h-1.5 rounded-full ${r.pass ? 'bg-success' : 'bg-error'}`} />Test {i + 1} · {r.pass ? 'pass' : 'fail'}</summary>
                 <pre className="px-2 pb-2 m-0 whitespace-pre-wrap">Input: {r.input}{'\n'}Expected: {r.output}{r.pass ? '' : `\nGot: ${r.out}${r.err ? `\n${r.err}` : ''}`}</pre>
               </details>))}</div>}
-            {(review || reviewing) && <div className="kb-rich text-[13px] border-t border-border pt-2">{review ? <Markdown text={review} /> : <Spin />}</div>}
+            {panel === 'review' && (review || reviewing) && <div className="flex flex-col gap-1"><div className="flex items-center gap-2 text-[11px] text-dim px-0.5"><span>Review{reviewing ? ' · writing…' : ''}</span><button onClick={closePanel} className="ml-auto w-6 h-6 rounded-md grid place-items-center hover:text-white hover:bg-white/5" title="Close"><Ico s={12} d={<path d="M18 6 6 18M6 6l12 12"/>} /></button></div><div className="kb-rich text-[13px]">{review ? <Markdown text={review} /> : <Spin />}</div></div>}
           </div>
         </div>
         {showCoach && <Coach study={study} ch={ch} code={code} results={res} onChat={chat => setCh({ ...ch, chat })} />}

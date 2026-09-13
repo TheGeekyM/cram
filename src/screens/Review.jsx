@@ -3,7 +3,7 @@ import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
 import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
-import { Centered, StudySelect, Trash } from '../components/SessionList.jsx'
+import { Centered, StudySelect, Trash, PageBar } from '../components/SessionList.jsx'
 
 // Review: spaced repetition over everything missed in interviews (and past quizzes), plus generated flashcards.
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
@@ -93,12 +93,12 @@ function Session({ cards: initial, steps, onExit, onChanged }) {
   const step = c.step ?? -1
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
-      <div className="island px-3 py-2 flex items-center gap-3 flex-shrink-0">
+      <PageBar tool="review">
         <button onClick={onExit} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center" title="Exit review"><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>
         <div className="flex-1 min-w-0"><div className="h-1.5 rounded-full bg-panel-2 overflow-hidden"><div className="h-full bg-accent rounded-full transition-all" style={{ width: `${i / queue.length * 100}%` }} /></div></div>
         <span className="text-xs font-mono text-dim tabular-nums">{i + 1} / {queue.length}</span>
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      </PageBar>
+      <div className="flex-1 min-h-0 overflow-y-auto pt-2.5">
         <div key={`${c.id}:${i}`} className="island p-6 max-w-3xl mx-auto flex flex-col gap-4" style={{ animation: 'rv-in .3s ease-out both' }}>
           <div className="flex items-center gap-2 text-xs"><span className={`badge py-0 ${SRC[c.source]?.[1] || ''}`}>{SRC[c.source]?.[0] || c.source}</span><span className="text-dim truncate">{c.studyTitle}</span>{c.lapses > 0 && <span className="ml-auto text-error">missed {c.lapses}×</span>}</div>
           <div dir="auto" className="text-lg font-medium text-white leading-relaxed">{c.q}</div>

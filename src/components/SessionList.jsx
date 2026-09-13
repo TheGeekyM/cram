@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api.js'
 
 // Shared layout for Quiz / Interview / Code: no sessions → the animated hero centered; otherwise a
@@ -27,6 +28,13 @@ export const StudySelect = ({ studies, value, onChange }) => (
     <option value="" disabled>Choose a study…</option>{studies.map(st => <option key={st.id} value={st.id}>{st.title}</option>)}
   </select>
 )
+// A detail view's top bar, rendered inside the app header (App.jsx keeps one slot per tool) so there is one bar, not two
+export function PageBar({ tool, children }) {
+  const [el, setEl] = useState(null)
+  useEffect(() => setEl(document.getElementById(`bar-${tool}`)), [tool])
+  return el && createPortal(<div className="flex-1 min-w-0 flex items-center gap-3">{children}</div>, el)
+}
+
 export const BackBtn = ({ onClick, title = 'Back' }) => <button onClick={onClick} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0" title={title}><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>
 export const Grid = ({ onNew, newLabel, children }) => (
   <div className="h-full overflow-y-auto p-2">

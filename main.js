@@ -1,4 +1,6 @@
 const { app, BrowserWindow, dialog, shell, Menu, safeStorage } = require('electron');
+// Chromium reaches PipeWire/PulseAudio through XDG_RUNTIME_DIR; a launch without it (runuser, cron, some launchers) plays audio into nothing
+if (process.platform === 'linux' && process.getuid) { const run = `/run/user/${process.getuid()}`; process.env.XDG_RUNTIME_DIR ||= run; process.env.DBUS_SESSION_BUS_ADDRESS ||= `unix:path=${run}/bus`; }
 process.env.CRAM_DATA = app.getPath('userData');
 const fs = require('fs');
 const path = require('path');

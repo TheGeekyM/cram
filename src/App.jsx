@@ -126,16 +126,15 @@ export default function App() {
       <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} due={due} onPalette={() => setPalette(true)} />
       <div className="flex-1 min-w-0 flex flex-col island overflow-hidden">
         {stale && <div className="px-4 py-2 text-xs bg-error/15 text-error border-b border-error/30 flex items-center gap-2"><b>Outdated server.</b><span className="flex-1 truncate">{stale}</span><button onClick={() => setStale('')} className="opacity-70 hover:opacity-100">✕</button></div>}
-        {pane && page !== 'plan' && (
-          <div className="h-11 flex items-center gap-2 px-3 border-b border-border bg-panel flex-shrink-0">
-            <span className="text-dim"><Ico d={I[page]} /></span><span className="text-sm font-semibold text-white">{ENTRIES.find(t => t[0] === page)[1]}</span>
+        {( // always mounted so the per-tool bar slots survive page switches; hidden where no header belongs
+          <div className={`app-bar min-h-11 py-1 flex items-center gap-2 px-3 border-b border-border bg-panel flex-shrink-0 ${pane && page !== 'plan' ? '' : 'hidden'}`}>
+            <span className="app-title flex items-center gap-2"><span className="text-dim"><Ico d={I[page] || I.grid} /></span><span className="text-sm font-semibold text-white">{ENTRIES.find(t => t[0] === page)?.[1]}</span></span>
+            {['code', 'interview', 'review'].map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
             {page === 'ask' && <><span className="text-dim mx-1">›</span>
               <select className="input w-auto py-1 max-w-[280px]" value={current || ''} onChange={e => e.target.value === '+' ? setNewStudy({ mode: 'subject', then: page }) : pick(e.target.value)}>
                 <option value="" disabled>Choose a study…</option>{studies.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}<option value="+">+ New study…</option>
               </select>
               {study && <span className="text-xs text-dim truncate hidden md:inline">{study.subject}</span>}</>}
-            <div className="flex-1" />
-            {settings && <span className={`badge ${settings.hasKey ? 'badge-green' : 'badge-red'}`}>{settings.hasKey ? `${settings.source === 'cli' ? 'CLI' : settings.source === 'claude' ? 'Claude' : 'key'} · ${settings.model.replace('claude-', '')}` : 'not signed in'}</span>}
           </div>
         )}
         <div className="flex-1 min-h-0 relative">
