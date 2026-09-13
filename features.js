@@ -381,7 +381,7 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
     if (stt) return stt;
     // pip's CUDA libraries (cuBLAS, cuDNN) sit inside the venv; the loader only reads LD_LIBRARY_PATH at start
     const nv = (() => { try { const sp = fs.readdirSync(path.join(STT, 'lib')).map(v => path.join(STT, 'lib', v, 'site-packages/nvidia')).find(fs.existsSync); return sp ? fs.readdirSync(sp).map(d => path.join(sp, d, 'lib')).filter(fs.existsSync) : []; } catch { return []; } })();
-    const p = spawn(STT_PY, [path.join(__dirname, 'stt.py')], { env: { ...process.env, LD_LIBRARY_PATH: [...nv, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(STT_PY, [path.join(__dirname, 'stt.py').replace('app.asar', 'app.asar.unpacked')], { env: { ...process.env, LD_LIBRARY_PATH: [...nv, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') }, stdio: ['pipe', 'pipe', 'pipe'] });
     const waiting = new Map(); let buf = '', n = 0;
     const me = stt = { ready: false, device: null, error: null, ask: (file, lang) => new Promise(r => { const id = ++n; waiting.set(id, r); p.stdin.write(JSON.stringify({ id, file, lang }) + '\n'); }) };
     p.stdout.on('data', d => {
