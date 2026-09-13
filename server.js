@@ -230,7 +230,7 @@ app.post('/api/studies/:id/chat', async (req, res) => {
   s.chat.push({ role: 'assistant', content: text || '*(stopped)*' }); touch(s); // never store an empty turn: the API rejects empty content
 });
 // ---------- the study's PDF and its chapter list ----------
-app.get('/api/studies/:id/source.pdf', (req, res) => { const f = path.join(STUDIES, path.basename(req.params.id), 'source.pdf'); if (fs.existsSync(f)) res.sendFile(f); else res.status(404).end(); });
+app.get('/api/studies/:id/source.pdf', (req, res) => { const f = path.join(STUDIES, path.basename(req.params.id), 'source.pdf'); if (fs.existsSync(f)) res.sendFile(f, { dotfiles: 'allow' }); else /* the data folder lives under ~/.config, which send refuses by default */ res.status(404).end(); });
 // PDF bookmarks via mutool: lines like `+\t\t"Binary search"\t#page=22&zoom=…`, one tab per level
 const bookmarks = f => new Promise(r => {
   let out = ''; const p = spawn('mutool', ['show', f, 'outline']);
