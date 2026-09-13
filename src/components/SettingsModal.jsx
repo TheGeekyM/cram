@@ -86,11 +86,12 @@ export default function SettingsModal({ settings, onClose, onChange }) {
   const signIn = async () => { await api.post('/api/auth/start', {}); setPending(true) }
   const finish = async () => { const r = await api.post('/api/auth/code', { code }); if (r.error) return setErr(r.error); setCode(''); setPending(false); setErr(''); onChange() }
   const signOut = async () => { await api.post('/api/auth/logout', {}); onChange() }
-  const save = async () => { await api.post('/api/settings', { apiKey: key, geminiKey: gkey, model, provider }); onChange(); onClose() }
-  return (
-    <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
-      <div className="island w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center mb-4"><div className="text-sm font-semibold text-white flex-1">Settings</div><button onClick={onClose} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5">✕</button></div>
+  const [saved, setSaved] = useState(false)
+  const save = async () => { await api.post('/api/settings', { apiKey: key, geminiKey: gkey, model, provider }); onChange(); setSaved(true); setTimeout(() => setSaved(false), 1800) }
+  return ( // a page of its own (the Settings entry in the sidebar), not a modal
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-2xl mx-auto px-6 py-6">
+        <div className="mb-5"><h1 className="text-xl font-semibold text-white">Settings</h1><p className="text-sm text-dim mt-0.5">How Cram reaches Claude, the interviewer's voice, reminders and your keys.</p></div>
         <div className="panel p-3 mb-3">
           <div className="flex items-center"><span className="text-xs font-semibold text-white flex-1">Claude Code CLI</span><span className={`badge ${settings?.cli ? 'badge-green' : ''}`}>{settings?.cli ? 'installed · uses your login' : 'not found'}</span></div>
           <p className="text-[11px] text-dim mt-1">Preferred when present: runs on your Claude subscription through the <span className="font-mono">claude</span> CLI, which is not throttled like raw API calls.</p>
@@ -116,7 +117,7 @@ export default function SettingsModal({ settings, onClose, onChange }) {
         <p className="text-[11px] text-dim mt-1 mb-3">Get one at <a className="text-accent hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Without it, questions use the Edge voice.</p>
         <label className="text-[11px] uppercase tracking-wider text-dim">Model</label>
         <select className="input mt-1 mb-4" value={model} onChange={e => setModel(e.target.value)}>{(settings?.models || ['claude-opus-5']).map(m => <option key={m}>{m}</option>)}</select>
-        <div className="flex items-center"><span className="text-[11px] text-dim">Cram by Mohamed Emad · thegeekym@gmail.com</span><div className="flex-1" /><button className="btn btn-primary" onClick={save}>Save</button></div>
+        <div className="flex items-center"><span className="text-[11px] text-dim">Cram by Mohamed Emad · thegeekym@gmail.com</span><div className="flex-1" />{saved && <span className="text-xs text-success mr-3">Saved</span>}<button className="btn btn-primary" onClick={save}>Save</button></div>
       </div>
     </div>
   )

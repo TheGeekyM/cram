@@ -35,8 +35,10 @@ export const I = {
 const PAGES = [['dashboard', 'Dashboard', I.grid], ['plan', 'Plan', I.plan], ['studies', 'Studies', I.book]]
 const TOOLS = [['interview', 'Interview', I.interview], ['code', 'Code', I.code], ['review', 'Review', I.review], ['notes', 'Notes', I.notes]]
 const ENTRIES = [...PAGES, ...TOOLS]
+I.settings = I.gear
+const LABELS = [...ENTRIES, ['settings', 'Settings', I.gear]] // header crumbs also name Settings, which sits at the sidebar's foot
 const HOME = ['dashboard', 'studies'] // drawn by HomeScreen; every other entry has its own pane
-const isPane = p => p === 'study' || (ENTRIES.some(e => e[0] === p) && !HOME.includes(p))
+const isPane = p => p === 'study' || p === 'settings' || (ENTRIES.some(e => e[0] === p) && !HOME.includes(p))
 const WS_OF = { source: 'source', ask: 'chat', study: 'chat', chat: 'chat', interview: 'interview', code: 'code', notes: 'notes', review: 'review', coach: 'coach' } // tools a study link opens inside the workspace
 const SLOTS = ['code', 'interview', 'review', 'study'] // header slots a PageBar can fill
 const GLOBAL = { plan: Plan, interview: Interview, code: CodeArena, review: Review } // panes not bound to one study
@@ -63,7 +65,7 @@ function Sidebar({ page, go, profile, onProfile, due, onPalette, hidden }) {
       {TOOLS.map((e, n) => Btn(e, n + PAGES.length))}
       <div className="flex-1" />
       <button onClick={onProfile} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-dim hover:text-white hover:bg-white/5"><span className="w-[15px] h-[15px] rounded-full bg-accent text-app grid place-items-center text-[9px] font-bold">{profile?.name?.[0]?.toUpperCase() || '?'}</span>{profile?.name || 'Set up profile'}</button>
-      <button onClick={() => window.dispatchEvent(new Event('cram:settings'))} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-dim hover:text-white hover:bg-white/5"><Ico d={I.gear} />Settings</button>
+      <button onClick={() => go('settings')} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${page === 'settings' ? 'bg-accent text-app font-semibold' : 'text-dim hover:text-white hover:bg-white/5'}`}><Ico d={I.gear} />Settings</button>
     </aside>
   )
 }
@@ -72,16 +74,16 @@ export default function App() {
   const [studies, setStudies] = useState([]); const [open, setOpen] = useState({})
   const [page, setPage] = useState('dashboard'); const [current, setCurrent] = useState(() => localStorage.getItem('cram:study') || null)
   const [visited, setVisited] = useState({}) // pane → true once shown, so panes stay mounted (and keep streams/timers) while you move around
-  const [settings, setSettings] = useState(null); const [showSettings, setShowSettings] = useState(false)
+  const [settings, setSettings] = useState(null)
   const [profile, setProfile] = useState(null); const [editProfile, setEditProfile] = useState(false); const [stale, setStale] = useState('')
   const [newStudy, setNewStudy] = useState(null) // { mode, prefill, then: pane|null }
   const [due, setDue] = useState(0); const [palette, setPalette] = useState(false); const [wsTool, setWsTool] = useState('chat')
 
   const reload = useCallback(async () => setStudies(await api.get('/api/studies')), [])
   const refreshDue = useCallback(() => api.get('/api/review').then(r => setDue(r.due || 0)).catch(() => {}), [])
-  const loadSettings = useCallback(async () => { const s = await api.get('/api/settings'); setSettings(s); if (!s.hasKey) setShowSettings(true); return s }, [])
+  const loadSettings = useCallback(async () => { const s = await api.get('/api/settings'); setSettings(s); if (!s.hasKey) setPage('settings'); return s }, [])
   useEffect(() => { reload(); loadSettings(); api.get('/api/profile').then(p => { if (p.error) { setStale(p.error); p = {} } setProfile(p); if (!p.name && !localStorage.getItem('cram:onboarded')) { setEditProfile(true); localStorage.setItem('cram:onboarded', '1') } }) }, [reload, loadSettings])
-  useEffect(() => { const f = () => setShowSettings(true); window.addEventListener('cram:settings', f); return () => window.removeEventListener('cram:settings', f) }, [])
+  useEffect(() => { const f = () => setPage('settings'); window.addEventListener('cram:settings', f); return () => window.removeEventListener('cram:settings', f) }, [])
   useEffect(() => { if (current) localStorage.setItem('cram:study', current); else localStorage.removeItem('cram:study') }, [current])
   useEffect(() => { refreshDue() }, [refreshDue, page])
   // drop a current study that no longer exists (deleted, or stale localStorage)
@@ -148,8 +150,8 @@ export default function App() {
             </> : <>
               <span className="app-title flex items-center">
                 {slotFilled[page]
-                  ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: page }))} title={`Back to ${ENTRIES.find(t => t[0] === page)?.[1]}`} className={Crumb.link}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</button>
-                  : <span className={Crumb.here}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</span>}
+                  ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: page }))} title={`Back to ${LABELS.find(t => t[0] === page)?.[1]}`} className={Crumb.link}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{LABELS.find(t => t[0] === page)?.[1]}</button>
+                  : <span className={Crumb.here}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{LABELS.find(t => t[0] === page)?.[1]}</span>}
               </span>
               {slotFilled[page] && <Crumb.Sep />}
             </>}
@@ -164,6 +166,7 @@ export default function App() {
           {page === 'study' && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">{current ? 'Loading…' : 'Pick a study from Studies.'}</div>}
           {Object.entries(GLOBAL).map(([t, Tool]) => (visited[t] || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} /></div>)}
           {(visited.notes || page === 'notes') && <div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} onHome={() => go('dashboard')} /></div>}
+          {page === 'settings' && <div className="absolute inset-0"><SettingsModal settings={settings} onChange={loadSettings} /></div>}
           {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} /></div>}
         </div>
       </div>
@@ -171,7 +174,6 @@ export default function App() {
       <ConfirmHost />
       <ReminderHost />
       {palette && <Palette entries={ENTRIES} studies={studies} onClose={() => setPalette(false)} onGo={id => { setPalette(false); go(id) }} onStudy={sid => { setPalette(false); openTool(sid, 'study') }} />}
-      {showSettings && <SettingsModal settings={settings} onClose={() => setShowSettings(false)} onChange={loadSettings} />}
       {newStudy && <NewDialog mode={newStudy.mode} prefill={newStudy.prefill} onClose={() => setNewStudy(null)} onCreated={created} />}
       {editProfile && <ProfileDialog profile={profile || {}} onSave={p => { setProfile(p); setEditProfile(false) }} onClose={() => setEditProfile(false)} />}
     </div>
