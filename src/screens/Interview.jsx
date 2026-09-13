@@ -3,7 +3,7 @@ import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
 import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
-import { Centered, useSessions, StudySelect, BackBtn, Grid, Tile, Stats } from '../components/SessionList.jsx'
+import { Centered, useSessions, StudySelect, BackBtn, PageBar, Grid, Tile, Stats } from '../components/SessionList.jsx'
 
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const MIC = <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>
@@ -305,7 +305,7 @@ function Session({ study, iv, setIv, onBack }) {
   const toggleSpeak = () => { const v = !speakOn; setSpeakOn(v); localStorage.setItem('cram:read-aloud', v ? '1' : '0'); if (!v) stopSpeech() }
   return (
     <div className="h-full flex flex-col gap-2.5 min-h-0">
-      <div className="island px-3 py-2 flex items-center gap-3 flex-shrink-0">
+      <PageBar tool="interview">
         <BackBtn onClick={onBack} title="Back to interviews" />
         <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-white capitalize">{iv.difficulty} interview <span className="text-dim font-normal normal-case">· {iv.language}</span></div><div className="text-[11px] text-dim">{n} answered · {ok} correct · avg {avg}/10</div></div>
         <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-app border border-border leading-tight">
@@ -315,8 +315,8 @@ function Session({ study, iv, setIv, onBack }) {
         {open && <button onClick={toggleSpeak} className={`btn-tint ${speakOn ? 'btn-purple' : ''}`} title="Read each question aloud"><Ico d={<><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></>} />{speakOn ? 'Reading aloud' : 'Read aloud'}</button>}
         {open ? <button onClick={end} className="btn-tint btn-red" disabled={busy}><Ico d={<rect x="6" y="6" width="12" height="12" rx="2"/>} />End</button>
           : <button onClick={() => setStatus('open')} className="btn-tint btn-green"><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Resume</button>}
-      </div>
-      <div ref={box} className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2.5">
+      </PageBar>
+      <div ref={box} className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2.5 pt-2.5">
         {open && preparing && (
           <div className="island p-8 flex flex-col items-center justify-center gap-4 flex-shrink-0 relative overflow-hidden" style={{ animation: 'iv-in .3s ease-out both', minHeight: 260 }}>
             <div className="absolute inset-0 pointer-events-none" aria-hidden>{[0, 1, 2].map(i => <div key={i} className="absolute left-1/2 top-1/2 w-16 h-16 -ml-8 -mt-8 rounded-full border border-accent/40" style={{ animation: `iv-ring 2.4s ease-out ${i * .8}s infinite` }} />)}</div>
