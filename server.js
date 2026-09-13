@@ -338,7 +338,7 @@ app.post('/api/studies/:id/interviews/:iid/answer', async (req, res) => {
 // ---------- around the interview: hints, the panel's hire decision, a strong model answer, answering a question again ----------
 const graded = (iv, r) => {
   const score = Math.max(0, Math.min(10, Math.round(+r.score || 0)));
-  const rubric = iv.mode === 'real' && r.rubric ? Object.fromEntries(RUBRICS[iv.round].map(k => [k, Math.max(0, Math.min(10, Math.round(+r.rubric[k] || 0)))])) : undefined;
+  const rubric = iv.mode === 'real' && r.rubric ? Object.fromEntries(RUBRICS[iv.round].filter(k => Number.isFinite(+r.rubric[k]) && r.rubric[k] !== null && r.rubric[k] !== '').map(k => [k, Math.max(0, Math.min(10, Math.round(+r.rubric[k])))])) : undefined;
   return { score, correct: iv.mode === 'real' ? score >= 6 : !!r.correct, ...(rubric ? { rubric } : {}) };
 };
 // write back into a fresh read: these calls take a while and the session may have been saved meanwhile
