@@ -8,7 +8,7 @@ const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fil
 export const Trash = <><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></>
 
 export const Centered = ({ children, wide }) => (
-  <div className="h-full overflow-y-auto flex items-center justify-center p-2"><div className={`w-full ${wide ? 'max-w-[820px]' : 'max-w-[640px]'} my-auto`}>{children}</div></div>
+  <div className="h-full overflow-y-auto flex items-center justify-center p-2"><div className={`w-full ${wide ? 'max-w-[1120px]' : 'max-w-[640px]'} my-auto`}>{children}</div></div>
 )
 
 // ---------- cross-study grid tools (Quiz / Interview / Code) ----------
@@ -32,7 +32,8 @@ export const StudySelect = ({ studies, value, onChange }) => (
 )
 // A detail view's top bar, rendered inside the app header (App.jsx keeps one slot per tool) so there is one bar, not two
 // The section crumb in the app header (e.g. "Interview") is the way back: App fires 'cram:back' with the tool name.
-export function PageBar({ tool, onBack, children }) {
+// keepSidebar: a light step (e.g. a setup form) where the main sidebar should stay open
+export function PageBar({ tool, onBack, children, keepSidebar }) {
   const [el, setEl] = useState(null)
   useEffect(() => setEl(document.getElementById(`bar-${tool}`)), [tool])
   useEffect(() => {
@@ -40,7 +41,7 @@ export function PageBar({ tool, onBack, children }) {
     const f = e => e.detail === tool && onBack()
     window.addEventListener('cram:back', f); return () => window.removeEventListener('cram:back', f)
   }, [tool, onBack])
-  return el && createPortal(<div className="flex-1 min-w-0 flex items-center gap-3 pl-1.5">{children}</div>, el) // pl-1.5 = a crumb's own padding, so both sides of › match
+  return el && createPortal(<div className="flex-1 min-w-0 flex items-center gap-3 pl-1.5" data-keep-side={keepSidebar || undefined}>{children}</div>, el) // pl-1.5 = a crumb's own padding, so both sides of › match
 }
 
 export const BackBtn = ({ onClick, title = 'Back' }) => <button onClick={onClick} className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0" title={title}><Ico d={<path d="m15 18-6-6 6-6"/>} /></button>

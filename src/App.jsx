@@ -132,11 +132,12 @@ export default function App() {
   const [slotFilled, setSlotFilled] = useState({}); const [peek, setPeek] = useState(false)
   useEffect(() => {
     const els = SLOTS.map(t => [t, document.getElementById(`bar-${t}`)]).filter(([, el]) => el)
-    const sync = () => setSlotFilled(Object.fromEntries(els.map(([t, el]) => [t, el.childElementCount > 0])))
+    // 'keep' = filled by a PageBar with keepSidebar: the crumb still goes back, but the sidebar stays
+    const sync = () => setSlotFilled(Object.fromEntries(els.map(([t, el]) => [t, el.querySelector('[data-keep-side]') ? 'keep' : el.childElementCount > 0])))
     const mo = new MutationObserver(sync); els.forEach(([, el]) => mo.observe(el, { childList: true })); sync()
     return () => mo.disconnect()
   }, [page]) // re-find the slots per page: on the very first render they may not be in the DOM yet
-  const detail = page === 'study' || page === 'notes' || (page !== 'dashboard' && !!slotFilled[page])
+  const detail = page === 'study' || page === 'notes' || (page !== 'dashboard' && slotFilled[page] === true)
   useEffect(() => setPeek(false), [page, detail])
   const hideSide = detail && !peek
   const created = async sid => { const then = newStudy?.then; setNewStudy(null); await reload(); openTool(sid, then || 'study') }
@@ -190,7 +191,7 @@ export default function App() {
               onOpen={(sid, tool) => openTool(sid, tool || 'study')} onOpenTool={openTool} onNew={(mode, prefill) => setNewStudy({ mode: mode || 'subject', prefill })} onDeleted={sid => { if (sid === current) setCurrent(null); setTabs(ts => ts.filter(t => t.sid !== sid)); setOpen(o => { const c = { ...o }; delete c[sid]; return c }); reload() }} />
           </div>
           {page === 'study' && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">{current ? 'Loading…' : 'Pick a study from Studies.'}</div>}
-          {Object.entries(GLOBAL).map(([t, Tool]) => (tabs.some(x => x.page === t) || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} /></div>)}
+          {Object.entries(GLOBAL).map(([t, Tool]) => (tabs.some(x => x.page === t) || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} active={page === t} /></div>)}
           {(tabs.some(x => x.page === 'notes') || page === 'notes') &&<div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} onHome={() => go('dashboard')} /></div>}
           {page === 'settings' && <div className="absolute inset-0"><SettingsModal settings={settings} onChange={loadSettings} /></div>}
           {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} /></div>}

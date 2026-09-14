@@ -158,11 +158,43 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
     const iv = (s.interviews || []).find(x => x.id === req.params.iid); if (!iv) return res.status(404).json({ error: 'no such interview' });
     const picked = [...new Set((Array.isArray(req.body?.turns) ? req.body.turns : []).map(Number))].filter(i => iv.turns[i]).sort((a, b) => a - b);
     if (!picked.length) return res.status(400).json({ error: 'Pick at least one question.' });
-    // streamed as lines of JSON so the picker can tick questions off: {done: i} | {failed: i} per question, then {result} or {error}
-    res.setHeader('Content-Type', 'application/x-ndjson'); const send = m => res.write(JSON.stringify(m) + '\n');
-    const answers = new Map(); let next = 0;
+    // streamed as lines of JSON so the picker can tick questions off: {done: i} | {failed: i} per question,
+    // {saved: [i], iv, note} each time questions land in the note, then {result} or {error}
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    const ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); }); // Cancel / closed dialog: stop asking
+    const send = m => { if (!ac.signal.aborted) res.write(JSON.stringify(m) + '\n'); };
+    // Saved as it goes, so a cancel or a closed app keeps what was written. Sorted by topic, and a question is appended
+    // only once every question before it has an answer or failed: the note stays grouped and is only ever appended to.
+    picked.sort((a, b) => String(iv.turns[a].topic || '').localeCompare(String(iv.turns[b].topic || '')) || a - b);
+    const answers = new Map(), failed = new Set(); let next = 0, flushed = 0, lastTopic = null, note = null, lastIv = null;
+    // An Arabic interview's note opens right-aligned and RTL: the Notes editor reads dir and text-align off these blocks
+    // (lines inside a list follow the list). Code blocks are left alone, code reads left to right.
+    const layout = h => /arab/i.test(iv.language) ? h.replace(/<(p|h[1-6]|ul|ol|blockquote)(\s[^>]*)?>/g, '<$1 dir="rtl" style="text-align: right"$2>') : h;
+    const flush = () => {
+      let md = ''; const ids = [];
+      while (flushed < picked.length && (answers.has(picked[flushed]) || failed.has(picked[flushed]))) {
+        const i = picked[flushed++], x = answers.get(i); if (!x) continue;
+        const k = String(iv.turns[i].topic || x.topic || 'General');
+        md += `${k !== lastTopic ? `## ${esc(k)}\n\n` : ''}### ${esc(iv.turns[i].q)}\n\n${x.answer}\n\n`; lastTopic = k; ids.push(i);
+      }
+      if (!ids.length) return;
+      const html = layout(marked.parse(md));
+      // the study may have changed during the calls (an answer graded): write into a fresh copy
+      const s2 = study(req.params.id), iv2 = (s2.interviews || []).find(x => x.id === iv.id); if (!iv2) throw new Error('This interview was deleted.');
+      const notes = loadNotes(), now = Date.now(); note = iv2.qaNote && notes.find(n => n.id === iv2.qaNote);
+      if (note) { note.content += html; note.updatedAt = now; }
+      else { // first export, or the old note was deleted
+        iv2.turns.forEach(t => delete t.inNote);
+        const name = iv2.mode === 'real' ? `${iv2.role} · ${iv2.round}` : `${s2.title} · ${iv2.difficulty}`;
+        note = { id: `qa-${now.toString(36)}`, title: `${name} interview · Q&A`, content: layout(marked.parse(`*Questions and right answers from a Cram interview on ${new Date(iv2.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.*`)) + html, parent: '', ...(s2.general ? {} : { studyId: s2.id }), createdAt: now, updatedAt: now };
+        notes.unshift(note); iv2.qaNote = note.id;
+      }
+      saveNotes(null, notes);
+      ids.forEach(i => { if (iv2.turns[i]) iv2.turns[i].inNote = true; });
+      save(s2); lastIv = iv2; send({ saved: ids, iv: iv2, note: { id: note.id, title: note.title } });
+    };
     await Promise.all(Array.from({ length: Math.min(4, picked.length) }, async () => { // ponytail: 4 answers at a time, raise if the CLI copes
-      while (next < picked.length) {
+      while (next < picked.length && !ac.signal.aborted) {
         const i = picked[next++], t = iv.turns[i];
         try {
           const r = await json(s, `Write a study note: the correct answer to this interview question that the learner should remember. ${/arab/i.test(iv.language) ? 'Write in Egyptian Arabic, keeping technical terms in English.' : 'Write in English.'}
@@ -173,31 +205,16 @@ Never mention, quote or grade the learner's own answer. Teach it as a model inte
 4. A bold line "Remember:" then 3-5 short bullets: the key points, plus the common mistake that loses marks on this question.
 Add a small example or code snippet inside a candidate turn only when it really helps. No heading and do not repeat the question.
 Question${t.topic ? ` [${t.topic}]` : ''}: ${t.q}
-Respond with ONLY JSON: {"topic": short topic label, "answer": markdown string}`);
+Respond with ONLY JSON: {"topic": short topic label, "answer": markdown string}`, undefined, { signal: ac.signal });
           if (!r.answer) throw new Error('no answer came back');
           answers.set(i, r); send({ done: i });
-        } catch (e) { send({ failed: i, error: e.message }); }
+        } catch (e) { failed.add(i); send({ failed: i, error: e.message }); }
+        try { flush(); } catch (e) { send({ error: e.message }); ac.abort(); }
       }
     }));
-    if (!answers.size) { send({ error: 'No answers came back. Try again.' }); return res.end(); }
-    try {
-      const groups = new Map();
-      for (const i of picked) { const x = answers.get(i); if (!x) continue; const k = String(iv.turns[i].topic || x.topic || 'General'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(`### ${esc(iv.turns[i].q)}\n\n${x.answer}`); }
-      const html = marked.parse([...groups].map(([k, L]) => `## ${esc(k)}\n\n${L.join('\n\n')}`).join('\n\n'));
-      // the study may have changed during the call (an answer graded): write into a fresh copy
-      const s2 = study(req.params.id), iv2 = (s2.interviews || []).find(x => x.id === iv.id); if (!iv2) throw new Error('This interview was deleted.');
-      const notes = loadNotes(), now = Date.now(); let note = iv2.qaNote && notes.find(n => n.id === iv2.qaNote);
-      if (note) { note.content += html; note.updatedAt = now; }
-      else { // first export, or the old note was deleted
-        iv2.turns.forEach(t => delete t.inNote);
-        const name = iv2.mode === 'real' ? `${iv2.role} · ${iv2.round}` : `${s2.title} · ${iv2.difficulty}`;
-        note = { id: `qa-${now.toString(36)}`, title: `${name} interview · Q&A`, content: marked.parse(`*Questions and right answers from a Cram interview on ${new Date(iv2.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}.*`) + html, parent: '', ...(s2.general ? {} : { studyId: s2.id }), createdAt: now, updatedAt: now };
-        notes.unshift(note); iv2.qaNote = note.id;
-      }
-      saveNotes(null, notes);
-      for (const i of answers.keys()) if (iv2.turns[i]) iv2.turns[i].inNote = true;
-      save(s2); send({ result: { iv: iv2, note: { id: note.id, title: note.title }, failed: picked.length - answers.size } });
-    } catch (e) { send({ error: e.message }); }
+    if (ac.signal.aborted) return res.end(); // cancelled: what finished is already in the note
+    if (!answers.size) send({ error: 'No answers came back. Try again.' });
+    else if (note) send({ result: { iv: lastIv, note: { id: note.id, title: note.title }, failed: failed.size } });
     res.end();
   });
 

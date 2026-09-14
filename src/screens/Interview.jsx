@@ -510,16 +510,20 @@ function QaNoteDialog({ iv, base, setIv, onClose }) {
   useEffect(() => { api.post('/api/notes/list', { extraFolders: [] }).then(r => { const ok = !!iv.qaNote && !!r.notes?.some(x => x.id === iv.qaNote); setHas(ok); setSel(fresh(ok)) }) }, []) // eslint-disable-line
   const [prog, setProg] = useState({}) // turn index → 'done' | 'failed' while the note is written
   const toggle = i => setSel(s => { const c = new Set(s); c.has(i) ? c.delete(i) : c.add(i); return c })
+  // Cancel (or leaving the page) aborts the request; the server stops asking, and what it already saved stays in the note
+  const ac = useRef(null)
+  useEffect(() => () => ac.current?.abort(), [])
   const run = async () => {
-    setBusy(true); setErr(''); setProg({})
+    setBusy(true); setErr(''); setProg({}); ac.current = new AbortController()
     const handle = m => {
       if (m.done != null) setProg(p => ({ ...p, [m.done]: 'done' }))
       else if (m.failed != null) setProg(p => ({ ...p, [m.failed]: 'failed' }))
-      else if (m.result) { setIv(m.result.iv); window.dispatchEvent(new Event('cram:notes-changed')); setDone({ ...m.result.note, failed: m.result.failed }) }
+      else if (m.saved) { setIv(m.iv); window.dispatchEvent(new Event('cram:notes-changed')) } // each batch is on disk now
+      else if (m.result) { setIv(m.result.iv); setDone({ ...m.result.note, failed: m.result.failed }) }
       else if (m.error) setErr(m.error)
     }
     try { // the server streams one JSON line per finished question
-      const res = await fetch(`${base}/qa-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turns: [...sel] }) })
+      const res = await fetch(`${base}/qa-note`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turns: [...sel] }), signal: ac.current.signal })
       if (!/json/.test(res.headers.get('content-type') || '')) throw new Error(`${res.status}: the app's server is not running the latest version. Restart Cram.`)
       const reader = res.body.getReader(), dec = new TextDecoder(); let buf = ''
       for (;;) {
@@ -528,10 +532,10 @@ function QaNoteDialog({ iv, base, setIv, onClose }) {
         lines.filter(l => l.trim()).forEach(l => handle(JSON.parse(l)))
         if (done) break
       }
-    } catch (e) { setErr(e.message) }
+    } catch (e) { if (e.name !== 'AbortError') setErr(e.message) }
     setBusy(false)
   }
-  const written = Object.values(prog).filter(v => v === 'done').length, failed = Object.values(prog).filter(v => v === 'failed').length
+  const written =Object.values(prog).filter(v => v === 'done').length, failed = Object.values(prog).filter(v => v === 'failed').length
   const link = 'text-dim hover:text-white'
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={busy ? undefined : onClose}>
@@ -568,7 +572,7 @@ function QaNoteDialog({ iv, base, setIv, onClose }) {
           <div className="p-4 flex items-center gap-2 border-t border-border">
             {err && <span className="text-xs text-error truncate">{err}</span>}
             {busy && !err && <span className="text-xs text-dim"><b className="text-white font-mono">{written}</b> of {sel.size} written · <b className="text-white font-mono">{sel.size - written - failed}</b> remaining{failed ? <span className="text-error"> · {failed} failed</span> : ''}</span>}
-            <button onClick={onClose} disabled={busy} className="btn-ghost ms-auto">Cancel</button>
+            <button onClick={onClose} title={busy ? 'Stop writing. Questions already ticked ✓ stay in the note.' : undefined} className="btn-ghost ms-auto">{busy ? 'Stop' : 'Cancel'}</button>{/* closing unmounts the dialog, which aborts the request */}
             <button disabled={busy || !sel.size || has === null} onClick={run} className="btn btn-primary inline-flex items-center gap-1.5">{busy ? <><Spin />Writing the note…</> : `Write ${sel.size} to Notes`}</button>
           </div>
         </>}
@@ -773,9 +777,11 @@ function Progress({ list }) {
 }
 
 // scope: GENERAL = the generic page (real interview rounds); a study id = inside that study's workspace (exam on its material)
-export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool, openId }) {
+export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool, openId, active: shown }) {
   const { list, update: setIv, add, remove } = useSessions('interviews', studies, scope)
   const [sel, setSel] = useState(openId || null) // null = cards, 'new' = hero, 'prep' | 'stories', id = session
+  // the pane stays mounted while its tab is open: leaving the page drops an unstarted "new" form, so coming back shows the list
+  useEffect(() => { if (shown === false) setSel(s => s === 'new' ? null : s) }, [shown])
   const [busy, setBusy] = useState(false)
   const active = list?.find(i => i.id === sel)
   const start = async opts => {
@@ -804,7 +810,7 @@ export default function Interview({ studies, scope = GENERAL, bar = 'interview',
   if (sel === 'stories') return <>{css}<StoryBank bar={bar} onBack={() => setSel(null)} /></>
   if (active) return <>{css}<Session key={active.id} study={{ id: scope }} iv={active} setIv={setIv} onBack={() => setSel(null)} bar={bar} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered wide={scope === GENERAL}>
-    {list.length > 0 && <button onClick={() => setSel(null)} className="btn-ghost text-xs inline-flex items-center gap-1 mb-2"><Ico d={<path d="m15 18-6-6 6-6"/>} />Back to interviews</button>}
+    {list.length > 0 && <PageBar tool={bar} onBack={() => setSel(null)} keepSidebar><span className="text-sm font-semibold text-white whitespace-nowrap">{scope === GENERAL ? 'New mock interview' : 'New interview'}</span></PageBar>}{/* the "Interview" crumb goes back to the list */}
     {scope === GENERAL ? <RealHero busy={busy} onStart={start} onCoding={() => onOpenTool?.(null, 'code')} onPrep={() => setSel('prep')} onStories={() => setSel('stories')} /> : <Hero busy={busy} onStart={start} />}
   </Centered></>
   const grid = <Grid onNew={() => setSel('new')} newLabel={scope === GENERAL ? 'New mock interview' : 'New interview'}>{list.map(iv => <Card key={iv.id} iv={iv} onOpen={() => setSel(iv.id)} onDelete={() => del(iv)} />)}</Grid>
