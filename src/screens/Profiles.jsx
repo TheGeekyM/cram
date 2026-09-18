@@ -18,11 +18,13 @@ const ago = t => { if (!t) return 'never'; const d = Math.floor((Date.now() - t)
 
 const STAGES = [['student', 'Studying'], ['job-hunting', 'Job hunting'], ['working', 'Working'], ['exam', 'Exam ahead']]
 const LANGS = [['English', 'English'], ['Arabic', 'العربية']]
+// only what changes how the app speaks to you — Arabic marks it in every sentence
+const GENDERS = [['male', 'Male · بيك'], ['female', 'Female · بيكي'], ['', 'Rather not say']]
 
 // The questions worth asking. Everything here feeds what Cram suggests and how it talks to you:
 // the target role decides which tools appear and what an interview even looks like.
 function NewProfile({ onCancel, onCreated }) {
-  const [p, setP] = useState({ name: '', target: '', career: '', stage: 'working', language: 'English', country: '', hoursPerWeek: 5, examName: '', examDate: '', notes: '' })
+  const [p, setP] = useState({ name: '', target: '', career: '', stage: 'working', language: 'English', gender: '', country: '', hoursPerWeek: 5, examName: '', examDate: '', notes: '' })
   const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
   const set = k => e => setP(x => ({ ...x, [k]: e.target.value }))
   const F = ({ label, k, ph, rows, hint }) => (
@@ -66,6 +68,13 @@ function NewProfile({ onCancel, onCreated }) {
             <span className="text-[11px] uppercase tracking-wider text-dim">Language</span>
             <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 mt-1">
               {LANGS.map(([k, l]) => <button key={k} onClick={() => setP(x => ({ ...x, language: k }))} className={`flex-1 text-[11px] px-1 py-1.5 rounded-md ${p.language === k ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`} dir="auto">{l}</button>)}
+            </div>
+          </label>
+          {/* Arabic addresses a man and a woman differently in every sentence; unset simply says nothing */}
+          <label className="block col-span-2">
+            <span className="text-[11px] uppercase tracking-wider text-dim">How Cram should address you</span>
+            <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 mt-1">
+              {GENDERS.map(([k, l]) => <button key={k} onClick={() => setP(x => ({ ...x, gender: k }))} className={`flex-1 text-[11px] px-1 py-1.5 rounded-md whitespace-nowrap ${(p.gender || '') === k ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`} dir="auto">{l}</button>)}
             </div>
           </label>
         </div>

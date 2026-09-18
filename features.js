@@ -113,7 +113,7 @@ Last week: ${last.minutes} min, ${last.sessions} sessions, average score ${last.
 ${last.list.join('\n') || '- no sessions'}
 The week before: ${prev.minutes} min, ${prev.sessions} sessions, average score ${prev.avg ?? 'n/a'}%. Per study: ${prev.perStudy}.
 ${app.locals.coachContext()}
-${roles.roleContext(p)}
+${roles.roleContext(p)} ${roles.addressRule(p)}
 The tools that exist are: ${roles.toolSentence(p)}. There is no quiz tool; never suggest a quiz. Compare the two weeks honestly and use the numbers. If last week had no study, say so plainly and make the focus a small restart. Address them by first name. Never mention ids. Respond with ONLY JSON: {"summary": string (2 sentences), "improved": [0-3 strings], "slipped": [0-3 strings], "focus": string (one concrete focus for this week)}`;
     try {
       const r = await json(NO_STUDY, prompt);
@@ -179,7 +179,8 @@ The tools that exist are: ${roles.toolSentence(p)}. There is no quiz tool; never
         tail: text.slice(-180).replace(/\\n/g, ' ').replace(/\\"/g, '"').replace(/\s+/g, ' ').trim() } });
     }; };
     const level = { beginner: 'a beginner', mid: 'someone past the basics', expert: 'an experienced practitioner' }[s.level];
-    const who = roles.roleContext(readJson(profileFile(), {})); // so a nutritionist's article is not written for engineers
+    const me = readJson(profileFile(), {});
+    const who = `${roles.roleContext(me)} ${roles.addressRule(me)}`.trim(); // so a nutritionist's article is not written for engineers, and it addresses her correctly
     const b = await json(s, `Write a deep, practical article for someone studying "${esc(s.title)}"${s.subject ? ` (${esc(s.subject)})` : ''}.${level ? ` The reader is ${level}.` : ''}
 It must be a 10 minute read at minimum: 1800-2400 words. Teach one specific, worthwhile idea from this subject in depth — not an overview of everything. ${who} Use concrete examples and a worked scenario from that practice, and short code or diagrams only where they genuinely earn their place. Markdown, with ## sections. No preamble about what the article will cover.
 ${LANGS[lang] || 'Write it in the language of the subject.'}${avoid.length ? ` Do NOT write about these, they are already covered: ${avoid.map(t => `"${esc(t)}"`).join('; ')}.` : ''}

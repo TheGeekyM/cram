@@ -68,6 +68,8 @@ function cleanProfile(body = {}, prev = {}) {
   const p = { ...prev, updatedAt: Date.now() };
   for (const k of TEXT) if (k in body) p[k] = String(body[k] ?? '').slice(0, 400);
   if ('hoursPerWeek' in body) p.hoursPerWeek = Math.max(1, Math.min(80, +body.hoursPerWeek || 5));
+  // only these two, or unset — the app says nothing about gender rather than guessing one
+  if ('gender' in body) p.gender = ['male', 'female'].includes(body.gender) ? body.gender : '';
   if ('examDate' in body) p.examDate = /^\d{4}-\d{2}-\d{2}$/.test(body.examDate || '') ? body.examDate : '';
   return p;
 }

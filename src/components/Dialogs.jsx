@@ -66,6 +66,11 @@ export function ProfileDialog({ profile, onSave, onClose }) {
             <label className="block mb-3"><span className="text-[11px] uppercase tracking-wider text-dim">Study time target</span>
               <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 mt-1">{[3, 5, 10, 15, 20].map(h => <button key={h} onClick={() => setP(x => ({ ...x, hoursPerWeek: h }))} className={`flex-1 text-[11px] px-1 py-1.5 rounded-md whitespace-nowrap ${+p.hoursPerWeek === h ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{h}h/wk</button>)}</div></label>
           </div>
+          {/* Arabic addresses a man and a woman differently in every sentence — أهلاً بيك / أهلاً بيكي */}
+          <label className="block mb-3"><span className="text-[11px] uppercase tracking-wider text-dim">How Cram should address you</span>
+            <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 mt-1">{[['male', 'Male · بيك'], ['female', 'Female · بيكي'], ['', 'Rather not say']].map(([k, l]) => <button key={k} onClick={() => setP(x => ({ ...x, gender: k }))} className={`flex-1 text-[11px] px-1 py-1.5 rounded-md whitespace-nowrap ${(p.gender || '') === k ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`} dir="auto">{l}</button>)}</div></label>
+          <div className="grid grid-cols-2 gap-x-3">
+          </div>
           {F({ label: 'What do you do now?', k: 'career', ph: 'e.g. backend developer, 3 years PHP; or CS student, 2nd year' })}
           {F({ label: 'What do you want to become / achieve?', k: 'goal', ph: 'e.g. senior engineer at a product company, pass the AWS SA exam in March' })}
           <div className="grid grid-cols-2 gap-x-3">

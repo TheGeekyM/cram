@@ -93,7 +93,8 @@ function context(s) {
   if (s.general) return { system: INTERVIEWER, prefix: [], pdf: null };
   // the learner's level and their role both shape every answer: a nutritionist asking about "absorption"
   // wants clinical examples, not database ones
-  const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.${LEVEL[s.level] ? ` The learner is ${LEVEL[s.level]}: pitch the depth, the vocabulary and the examples for that level.` : ''} ${roles.roleContext(readJson(PROFILE, {}))}`.trim();
+  const me = readJson(PROFILE, {});
+  const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.${LEVEL[s.level] ? ` The learner is ${LEVEL[s.level]}: pitch the depth, the vocabulary and the examples for that level.` : ''} ${roles.roleContext(me)} ${roles.addressRule(me)}`.trim();
   if (!fs.existsSync(pdf)) return { system: `${SYSTEM}\n${intro}`, prefix: [], pdf: null };
   return { system: `${SYSTEM}\n${intro} The study material is the attached PDF.`, pdf, prefix: [
     { role: 'user', content: [
@@ -230,7 +231,7 @@ app.post('/api/coach', async (req, res) => {
 Today: ${localDay(Date.now())}. Streak: ${d.streak} days. This week: ${d.weekMinutes} minutes. Total: ${d.totalMinutes} minutes.
 ${app.locals.coachContext?.() || ''}
 Studies:\n${stats}\nRecent sessions:\n${d.events.slice(0, 8).map(e => `- ${localDay(e.at)} ${e.kind} "${e.title}" in ${e.study}: ${e.score == null ? 'not scored' : Math.round(e.score * 100) + '%'}${e.done ? '' : ' (unfinished)'}`).join('\n') || '- none'}
-${roles.roleContext(p)}
+${roles.roleContext(p)} ${roles.addressRule(p)}
 The tools that exist are: ${roles.toolSentence(p)}. There is no quiz tool; never suggest a quiz. Never mention ids in any text field (use studyId fields for that). Be concrete and honest; base advice on the numbers (weak scores, neglected studies, unfinished sessions, gap between goal and what they study). Address them by first name. Respond with ONLY JSON: {"headline": string (one motivating line, max 12 words), "next": {"studyId": string|null, "title": string, "why": string (1-2 lines), "tool": "interview"|"code"|"ask"|"review"|"new", "topic": string}, "todos": [4-6 of {"text": string, "tool": "interview"|"code"|"ask"|"review"|"new", "studyId": string|null}], "tips": [3 short concrete tips to get better, each mentioning a specific study or habit], "suggestNew": [2-3 of {"title": string, "subject": string (one-line scope), "why": string}] (subjects worth adding given their goal), "nudge": string (one-line reminder to keep going)}`;
   try { const plan = await json(NO_STUDY, prompt); fs.writeFileSync(COACH, JSON.stringify({ key, at: Date.now(), plan })); res.json({ ...plan, at: Date.now() }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -347,7 +348,7 @@ const storiesFor = iv => {
   const L = ['behavioral', 'situational', 'management'].includes(iv.round) ? loadStories() : [];
   return L.length ? `The candidate prepared these STAR stories. Now and then ask them to walk you through one that fits, and probe it like a real interviewer (their own part, the numbers, what they would do differently):\n${L.slice(0, 12).map(x => `- "${x.title}"${x.skills.length ? ` (${x.skills.join(', ')})` : ''}: ${cut(x.situation, 160)} → ${cut(x.result, 120)}`).join('\n')}\n` : '';
 };
-const realBase = iv => `You are interviewing a candidate in a real ${rounds.resolve(iv).label} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)}
+const realBase = iv => `You are interviewing a candidate in a real ${rounds.resolve(iv).label} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)} ${roles.addressRule(readJson(PROFILE, {}))}
 ${rounds.resolve(iv).guide}
 ${PERSONAS[iv.persona] || ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
 // A consultation is not an interview: Cram is the person in front of them — a patient, a client, a
@@ -355,7 +356,7 @@ ${PERSONAS[iv.persona] || ''}${storiesFor(iv)}${iv.jd ? `The job description the
 // machinery; only who is speaking changes.
 const consultBase = iv => {
   const r = rounds.resolve(iv), who = iv.clientWord || 'client';
-  return `You are role-playing a ${who} in a consultation with a ${iv.seniority} ${iv.role}. You are NOT an interviewer: you are the ${who}. ${langRule(iv.language)}
+  return `You are role-playing a ${who} in a consultation with a ${iv.seniority} ${iv.role}. You are NOT an interviewer: you are the ${who}. ${langRule(iv.language)} ${roles.addressRule(readJson(PROFILE, {}))}
 ${r.guide}
 Stay in character for every turn. Answer what the professional actually asks, volunteer what this person would naturally volunteer, and react to their explanations as this person would. Never grade, coach, hint, or tell them what to ask next.
 `;
