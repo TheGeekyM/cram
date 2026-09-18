@@ -352,6 +352,10 @@
 .kb-rich img { max-width: 100%; height: auto; }
 .kb-rich pre { white-space: pre-wrap; background: rgb(var(--c-panel-2)); padding: 0.5rem 0.6rem; border-radius: 0.375rem; overflow-x: auto; }
 .kb-rich code { font-family: ui-monospace, monospace; font-size: 0.8125rem; }
+/* code stays ltr and left-aligned inside Arabic text, like .nt-page */
+.kb-rich pre { direction: ltr; text-align: left; margin: 0.5rem 0; }
+.kb-rich code { direction: ltr; unicode-bidi: isolate; }
+.kb-rich :not(pre) > code { background: rgb(var(--c-panel-2) / 0.7); border: 1px solid rgb(var(--c-border) / 0.6); border-radius: 4px; padding: 0.05em 0.3em; }
 
 /* The Forge's full-page run report: same markdown, but sized to be read as a document
    rather than as a side-panel note. */
@@ -662,6 +666,10 @@
   line-height: 1.55;
 }
 .nt-page pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+/* In an Arabic (rtl) page only the code stays ltr: blocks read left-aligned, and inline code keeps
+   its own order (`foo(a, b)` would otherwise flip its brackets) while sitting in the rtl sentence. */
+.nt-page pre { direction: ltr; text-align: left; }
+.nt-page code { direction: ltr; unicode-bidi: isolate; }
 
 /* ── Cold-start splash ──────────────────────────────────────────────────────
    Sits over the app while it mounts and removes itself. Timings here are the

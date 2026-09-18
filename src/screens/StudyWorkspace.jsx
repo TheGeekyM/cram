@@ -85,7 +85,7 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
   )
 }
 
-export default function StudyWorkspace({ study, setStudy, tool, setTool, onChanged }) {
+export default function StudyWorkspace({ study, setStudy, tool, setTool, onChanged, profile }) {
   const one = [{ id: study.id, title: study.title }]
   const [srcJump, setSrcJump] = useState(null); const [prefill, setPrefill] = useState(null); const [openIv, setOpenIv] = useState(null)
   const pick = id => { setOpenIv(null); setTool(id) }
@@ -108,7 +108,8 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
           <div className="text-[11px] text-dim truncate" dir="auto">{study.subject || (study.hasPdf ? 'From a PDF' : 'Study')}{study.hasPdf && study.subject ? ' · PDF' : ''}</div>
         </div>
         <div className="text-[10px] uppercase tracking-[0.18em] text-dim px-2.5 pb-1">Study tools</div>
-        {WS_TOOLS.map(([id, label, ic, sub]) => (
+        {/* the role decides what a study offers too: no Code challenges for someone who writes none */}
+        {WS_TOOLS.filter(([id]) => (profile?.tools ? profile.tools.includes(id) : true) || ['chat', 'source', 'coach'].includes(id)).map(([id, label, ic, sub]) => (
           <button key={id} onClick={() => pick(id)} className={`flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${tool === id ? 'bg-accent/15 text-white' : 'text-dim hover:text-white hover:bg-white/5'}`}>
             <span className={`mt-0.5 ${tool === id ? 'text-accent' : ''}`}><Ico d={ic} /></span>
             <span className="min-w-0"><span className="block text-sm">{label}</span><span className="block text-[11px] text-dim truncate">{sub}</span></span>

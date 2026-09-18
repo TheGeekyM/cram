@@ -3,6 +3,7 @@ import { api } from '../api.js'
 import { notify, setBlogSeen } from '../notify.js'
 import { PageBar } from '../components/SessionList.jsx'
 import { ask } from '../components/Confirm.jsx'
+import Markdown from '../components/Markdown.jsx'
 import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
 
@@ -59,12 +60,14 @@ function Comments({ list }) {
               <span className="text-[13px] font-semibold text-white" dir="auto">{c.author}</span>
               {c.role && <span className="text-[11px] text-dim" dir="auto">{c.role}</span>}
             </div>
-            <p className="text-sm text-gray-300 mt-1.5 whitespace-pre-wrap leading-[1.65]" dir="auto">
+            {/* direction from the comment's own first letter, not dir=auto: that would see the Latin @name first */}
+            <div className="text-sm text-gray-300 mt-1.5 leading-[1.65]" dir={/^[^A-Za-z\u0590-\u08FF]*[\u0590-\u08FF]/.test(c.text) ? 'rtl' : 'ltr'}>
               {/* a reply opens by naming who it answers; clicking goes there and flashes it */}
               {parent && <button onClick={() => jump(c.replyTo)} title={`Go to ${parent.author}'s comment`}
                 className="font-medium hover:underline me-1.5" style={{ color: 'hsl(214 95% 68%)' }} dir="auto">@{parent.author}</button>}
-              {c.text}
-            </p>
+              {/* comments are markdown (bold, `code`, fences); the first paragraph runs inline after the @name */}
+              <Markdown text={c.text} className="inline [&>p:first-child]:inline" />
+            </div>
           </div>
         </div>
         {mine.map(k => row(k, Math.min(depth + 1, MAX_INDENT)))}
@@ -77,7 +80,13 @@ function Comments({ list }) {
 // The right-hand panel: what is being written right now. Stays put while you read something else.
 function Progress({ job, onClose }) {
   if (!job) return null
-  const { study, stage, done, total, error, titles } = job
+  const { study, stage, done, total, error, titles, log, live, since } = job
+  const [, tick] = useState(0); useEffect(() => { const t = setInterval(() => tick(x => x + 1), 1000); return () => clearInterval(t) }, []) // the elapsed counter
+  const secs = Math.round((Date.now() - since) / 1000), took = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`
+  // the model thinks before it writes (a minute or more for an article) and that part is not visible, so it gets its own label
+  const now = stage === 'comments'
+    ? (live?.comments ? `Writing the discussion… ${live.comments} comments` : 'Planning the discussion…')
+    : (live?.words ? `Writing the article… ~${live.words.toLocaleString()} words` : 'Planning the article…')
   return (
     <aside className="island w-72 flex-shrink-0 flex flex-col p-3 gap-2 self-start">
       <div className="flex items-center gap-2">
@@ -86,7 +95,11 @@ function Progress({ job, onClose }) {
       </div>
       <div className="text-[11px] text-dim" dir="auto">{study}</div>
       <div className="h-1.5 rounded-full bg-panel-2 overflow-hidden"><div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.round((done / total) * 100)}%` }} /></div>
-      {!error && done < total && <div className="text-[11px] text-gray-300 flex items-center gap-1.5"><span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />{stage === 'comments' ? 'Adding the discussion…' : 'Writing the article…'}</div>}
+      {/* the log: one line per step, with the time it started */}
+      <div className="flex flex-col gap-0.5 font-mono text-[10px] text-dim max-h-40 overflow-y-auto">{log.map((l, i) => <div key={i} dir="auto"><span className="text-dim/60">{l.at}</span> {l.text}</div>)}</div>
+      {!error && done < total && <div className="text-[11px] text-gray-300 flex items-center gap-1.5"><span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+        <span className="flex-1">{now}</span><span className="font-mono text-dim">{took}</span></div>}
+      {!error && done < total && live?.tail && <div className="text-[10px] text-dim bg-app/60 border border-border rounded-md px-2 py-1.5 line-clamp-4 break-words" dir="auto">…{live.tail}</div>}{/* what the model is writing right now */}
       {titles.map((t, i) => <div key={i} className="text-[11px] text-success truncate" dir="auto" title={t}>✓ {t}</div>)}
       {error && <div className="text-[11px] text-error">{error}</div>}
       {done >= total && !error && <div className="text-[11px] text-dim">Saved to the list.</div>}
@@ -188,6 +201,7 @@ export default function Blog({ studies = [], openId }) {
   const sug = useMemo(() => { const t = typed.trim().toLowerCase(); return t.length < 2 ? [] : all.filter(a => a.search?.includes(t)).slice(0, 6) }, [typed, all])
   const shown = useMemo(() => { const t = q.trim().toLowerCase(); return t ? all.filter(a => a.search?.includes(t)) : all }, [q, all])
 
+  const line = text => ({ at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), text })
   // One request per article, in sequence: Stop just stops asking for the next one, so a cancelled
   // run can never leave another article being written in the background.
   const one = async (studyId, language) => {
@@ -199,14 +213,15 @@ export default function Blog({ studies = [], openId }) {
       const lines = buf.split('\n'); buf = done ? '' : lines.pop()
       for (const l of lines.filter(x => x.trim())) {
         const m = JSON.parse(l)
-        if (m.stage) setJob(j => j && { ...j, stage: m.stage })
+        if (m.progress) setJob(j => j && { ...j, live: m.progress })
+        else if (m.stage) setJob(j => j && { ...j, stage: m.stage, live: null, since: Date.now(), log: m.stage === 'comments' ? [...j.log, line(`Article written · ${m.words.toLocaleString()} words`), line('Writing the discussion')] : j.log })
         else if (m.saved) { // on disk now: show it, tell the bell, refresh the list
           ok = true
-          setJob(j => j && { ...j, done: j.done + 1, titles: [...j.titles, m.saved.title], stage: 'body' })
+          setJob(j => j && { ...j, done: j.done + 1, titles: [...j.titles, m.saved.title], stage: 'body', live: null, log: [...j.log, line(`Saved · ${m.saved.comments} comments`)] })
           notify(`New article: ${m.saved.title}`, { sub: m.saved.studyTitle, link: { page: 'blog', id: m.saved.id } })
           setBlogSeen(m.saved.at) // announced here, so App's watcher does not announce it again
           load()
-        } else if (m.error) setJob(j => j && { ...j, error: m.error })
+        } else if (m.error) setJob(j => j && { ...j, error: m.error, log: [...j.log, line(`Failed: ${m.error}`)] })
       }
       if (done) break
     }
@@ -215,11 +230,11 @@ export default function Blog({ studies = [], openId }) {
   const start = async (ids, lang) => {
     setGen(false)
     const name = id => studies.find(s => s.id === id)?.title || 'Study'
-    setJob({ study: name(ids[0]), stage: 'body', done: 0, total: ids.length, titles: [], error: '' })
+    setJob({ study: name(ids[0]), stage: 'body', done: 0, total: ids.length, titles: [], error: '', log: [], live: null, since: Date.now() })
     ac.current = new AbortController()
     for (const id of ids) { // one study at a time, so Stop only ever loses the one being written
       if (ac.current.signal.aborted) break
-      setJob(j => j && { ...j, study: name(id), stage: 'body' })
+      setJob(j => j && { ...j, study: name(id), stage: 'body', live: null, since: Date.now(), log: [...j.log, line(`Writing an article for ${name(id)}`)] })
       try { if (!await one(id, lang)) break } // an error line already showed; do not burn another call
       catch (e) { if (e.name !== 'AbortError') setJob(j => j && { ...j, error: e.message }); break }
     }

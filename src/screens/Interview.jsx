@@ -29,6 +29,9 @@ const ROUNDS = [
   ['coding', 'Coding', 'Opens a challenge in Code', <><path d="M4 17 10 11 4 5"/><path d="M12 19h8"/></>],
 ]
 const roundName = id => ROUNDS.find(r => r[0] === id)?.[1] || id
+// icons for rounds a role brought with it: a mic for question-and-answer, two people for a consultation
+const QA_ICON = <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>
+const CONSULT_ICON = <><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M15 20a4.5 4.5 0 0 1 6-4"/></>
 const SENIORITY = ['junior', 'mid', 'senior', 'lead']
 const real = iv => iv.mode === 'real'
 const PERSONA_OPTS = ['friendly', 'neutral', 'tough']
@@ -38,9 +41,18 @@ const FILLERS = /(^|[\s،,.])(يعني|امم+|آآ+|um+|uh+|you know|basically)
 const VERDICT = { strong_hire: ['Strong hire', 'badge-green'], hire: ['Hire', 'badge-green'], lean_hire: ['Leaning hire', 'badge-blue'], lean_no_hire: ['Leaning no hire', 'badge-yellow'], no_hire: ['No hire', 'badge-red'] }
 
 // ---------- generic hero: a real interview round for a target role ----------
-function RealHero({ busy, onStart, onCoding, onPrep, onStories }) {
+function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
   const saved = (() => { try { return JSON.parse(localStorage.getItem('cram:iv-setup') || '{}') } catch { return {} } })()
-  const [role, setRole] = useState(saved.role || ''); const [sen, setSen] = useState(saved.seniority || 'mid'); const [round, setRound] = useState(saved.round || 'technical')
+  // The rounds this profile's role actually has — a nutritionist gets a client consultation, not system
+  // design. The built-in six are the fallback for a profile with no derived role yet.
+  const own = (profile?.rounds || []).map(r => [r.id, r.label, r.sub || (r.kind === 'consult' ? 'You run the encounter' : 'Questions and answers'), r.kind === 'consult' ? CONSULT_ICON : QA_ICON])
+  const coding = ROUNDS.find(r => r[0] === 'coding')
+  const list = [...(own.length ? own : ROUNDS.filter(r => r[0] !== 'coding')), ...(profile?.tools && !profile.tools.includes('code') ? [] : [coding])]
+  const levels = profile?.role?.levels?.length ? profile.role.levels : SENIORITY
+  // a remembered choice can belong to another role (or another profile): fall back rather than 400
+  const [role, setRole] = useState(saved.role || profile?.target || '')
+  const [sen, setSen] = useState(levels.includes(saved.seniority) ? saved.seniority : levels[Math.min(1, levels.length - 1)])
+  const [round, setRound] = useState(list.some(r => r[0] === saved.round) ? saved.round : list[0][0])
   const [lang, setLang] = useState(saved.language || 'English'); const [jd, setJd] = useState(''); const [showJd, setShowJd] = useState(false); const [persona, setPersona] = useState(saved.persona || 'neutral')
   const go = () => {
     if (round === 'coding') return onCoding?.()
@@ -57,13 +69,13 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories }) {
         {onPrep && <div className="ms-auto flex gap-1.5 flex-shrink-0 self-start"><button onClick={onPrep} className="btn-tint text-xs">Job prep</button><button onClick={onStories} className="btn-tint text-xs">Story bank</button></div>}
       </div>
       <div className="relative grid gap-3 sm:grid-cols-[1fr_auto] items-end">
-        <label className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Role</span><input className="input" placeholder="e.g. Backend engineer, Product manager" value={role} onChange={e => setRole(e.target.value)} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} autoFocus /></label>
-        <div className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Level</span><Pills value={sen} onChange={setSen} options={SENIORITY} /></div>
+        <label className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Role</span><input className="input" placeholder={profile?.role?.title || profile?.target || 'e.g. Backend engineer, Product manager'} value={role} onChange={e => setRole(e.target.value)} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} autoFocus dir="auto" /></label>
+        <div className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Level</span><Pills value={sen} onChange={setSen} options={levels} /></div>
       </div>
       <div className="relative flex flex-col gap-1.5">
         <span className="text-[11px] uppercase tracking-wider text-dim">Round</span>
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
-          {ROUNDS.map(([id, label, sub, ic]) => (
+          {list.map(([id, label, sub, ic]) => (
             <button key={id} onClick={() => setRound(id)} className={`text-left rounded-xl border p-3 flex flex-col gap-1.5 transition-all ${round === id ? 'border-accent bg-accent/10 shadow-[0_0_0_3px_rgb(var(--c-accent)/.15)]' : 'border-border bg-app/60 hover:border-gray-500'}`}>
               <span className={round === id ? 'text-accent' : 'text-dim'}><Ico s={16} d={ic} /></span>
               <span className="text-sm font-medium text-white">{label}</span><span className="text-[11px] text-dim leading-snug">{sub}</span>
@@ -77,7 +89,7 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories }) {
       </div>
       {showJd && <textarea dir="auto" className="relative input min-h-[120px] resize-y" placeholder="Paste the job posting (optional). Questions get tailored to it." value={jd} onChange={e => setJd(e.target.value.slice(0, 6000))} />}
       <button disabled={busy || (round !== 'coding' && !role.trim())} onClick={go} className="relative btn btn-primary text-base px-6 py-2.5 inline-flex items-center justify-center gap-2 self-center" style={busy ? undefined : { animation: 'iv-pulse 2.4s ease-out infinite' }}>
-        {busy ? <Wait label="The interviewer is getting ready…" /> : round === 'coding' ? <><Ico d={<><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></>} />Open Code</> : <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Start {roundName(round).toLowerCase()} round</>}
+        {busy ? <Wait label="The interviewer is getting ready…" /> : round === 'coding' ? <><Ico d={<><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></>} />Open Code</> : <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Start {(list.find(r => r[0] === round)?.[1] || 'the').toLowerCase()} round</>}
       </button>
     </div>
   )
@@ -120,7 +132,7 @@ function Hero({ busy, onStart }) {
 function Card({ iv, onOpen, onDelete }) {
   const { n, ok, avg } = stats(iv); const open = iv.status === 'open'
   return (
-    <Tile dot={open ? 'bg-accent animate-pulse' : 'bg-dim'} title={real(iv) ? roundName(iv.round) : iv.difficulty[0].toUpperCase() + iv.difficulty.slice(1)} sub={real(iv) ? iv.seniority : iv.language} study={real(iv) ? `${iv.role}${iv.jd ? ' · job description' : ''}` : ''} onDelete={onDelete}
+    <Tile dot={open ? 'bg-accent animate-pulse' : 'bg-dim'} title={real(iv) ? (iv.roundLabel || roundName(iv.round)) : iv.difficulty[0].toUpperCase() + iv.difficulty.slice(1)} sub={real(iv) ? iv.seniority : iv.language} study={real(iv) ? `${iv.role}${iv.jd ? ' · job description' : ''}` : ''} onDelete={onDelete}
       badge={<span className="flex items-center gap-1.5">
         {iv.report && <span className="badge-purple py-0 inline-flex items-center gap-1" title={`Coaching ready · ${iv.report.resources.length} verified links`}><Ico s={10} d={<path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>} />{iv.report.resources.length}</span>}
         <span className={`badge py-0 ${open ? 'badge-green' : ''}`}>{open ? 'In progress' : 'Ended'}</span>
@@ -683,7 +695,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
     <div className="h-full flex flex-col min-h-0">
       <PageBar tool={bar} onBack={onBack}>
         <div className="min-w-0 flex-1 flex items-baseline gap-2">{real(iv)
-          ? <span className="text-sm font-semibold text-white whitespace-nowrap">{roundName(iv.round)} round <span className="text-dim font-normal">· {iv.seniority} {iv.role}</span></span>
+          ? <span className="text-sm font-semibold text-white whitespace-nowrap">{iv.roundLabel || roundName(iv.round)} round <span className="text-dim font-normal">· {iv.seniority} {iv.role}</span></span>
           : <span className="text-sm font-semibold text-white capitalize whitespace-nowrap">{iv.difficulty} interview <span className="text-dim font-normal normal-case">· {iv.language}</span></span>}
           <span className="text-xs text-dim truncate min-w-0">{n} answered · {ok} {real(iv) ? 'strong' : 'correct'} · avg {avg}/10</span></div>
         <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-app border border-border leading-tight">
@@ -777,7 +789,7 @@ function Progress({ list }) {
 }
 
 // scope: GENERAL = the generic page (real interview rounds); a study id = inside that study's workspace (exam on its material)
-export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool, openId, active: shown }) {
+export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool, openId, active: shown, profile }) {
   const { list, update: setIv, add, remove } = useSessions('interviews', studies, scope)
   const [sel, setSel] = useState(openId || null) // null = cards, 'new' = hero, 'prep' | 'stories', id = session
   // the pane stays mounted while its tab is open: leaving the page drops an unstarted "new" form, so coming back shows the list
@@ -789,7 +801,7 @@ export default function Interview({ studies, scope = GENERAL, bar = 'interview',
     if (iv.error) return alert(iv.error); add(iv, scope); setSel(iv.id)
   }
   const del = async iv => {
-    if (!await ask({ title: `Delete this ${real(iv) ? roundName(iv.round).toLowerCase() : iv.difficulty} interview?`, body: 'Its questions, answers and score are removed.', ok: 'Delete' })) return
+    if (!await ask({ title: `Delete this ${real(iv) ? (iv.roundLabel || roundName(iv.round)).toLowerCase() : iv.difficulty} interview?`, body: 'Its questions, answers and score are removed.', ok: 'Delete' })) return
     await api.del(`/api/studies/${iv.studyId}/interviews/${iv.id}`); remove(iv.id); if (sel === iv.id) setSel(null)
   }
   // a coding topic from a prep plan: the generic Code page opens its start panel with the topic filled in
@@ -811,7 +823,7 @@ export default function Interview({ studies, scope = GENERAL, bar = 'interview',
   if (active) return <>{css}<Session key={active.id} study={{ id: scope }} iv={active} setIv={setIv} onBack={() => setSel(null)} bar={bar} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered wide={scope === GENERAL}>
     {list.length > 0 && <PageBar tool={bar} onBack={() => setSel(null)}><span className="text-sm font-semibold text-white whitespace-nowrap">{scope === GENERAL ? 'New mock interview' : 'New interview'}</span></PageBar>}{/* the "Interview" crumb goes back to the list */}
-    {scope === GENERAL ? <RealHero busy={busy} onStart={start} onCoding={() => onOpenTool?.(null, 'code')} onPrep={() => setSel('prep')} onStories={() => setSel('stories')} /> : <Hero busy={busy} onStart={start} />}
+    {scope === GENERAL ? <RealHero busy={busy} onStart={start} onCoding={() => onOpenTool?.(null, 'code')} onPrep={() => setSel('prep')} onStories={() => setSel('stories')} profile={profile} /> : <Hero busy={busy} onStart={start} />}
   </Centered></>
   const grid = <Grid onNew={() => setSel('new')} newLabel={scope === GENERAL ? 'New mock interview' : 'New interview'}>{list.map(iv => <Card key={iv.id} iv={iv} onOpen={() => setSel(iv.id)} onDelete={() => del(iv)} />)}</Grid>
   if (scope !== GENERAL) return <>{css}{grid}</>

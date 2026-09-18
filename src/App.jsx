@@ -14,6 +14,7 @@ import ConfirmHost from './components/Confirm.jsx'
 import { ReminderHost } from './components/Reminders.jsx'
 import Palette from './components/Palette.jsx'
 import { NewDialog, ProfileDialog } from './components/Dialogs.jsx'
+import Profiles from './screens/Profiles.jsx'
 import { api } from './api.js'
 
 // Shell: the sidebar lists pages (Dashboard, Plan, Studies) and the generic tools (Interview, Code, Review, Notes).
@@ -52,13 +53,14 @@ const Crumb = {
   link: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm text-dim hover:text-white hover:bg-white/5 transition-colors',
 }
 // the account cluster in the top bar on every page but the dashboard (whose sidebar has its own), in aidle's order: bell, gear, account
-const Account = ({ profile, onProfile, onSettings }) => <>
+const Account = ({ profile, onProfile, onSettings, onProfiles }) => <>
+  <button onClick={onProfiles} title="Switch profile" aria-label="Switch profile" className="w-7 h-7 rounded-md grid place-items-center flex-shrink-0 text-dim hover:text-white hover:bg-white/5 transition-colors"><Ico d={<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 11 3 3-3 3"/></>} /></button>
   <NotificationBell />
   <button onClick={onSettings} title="Settings" aria-label="Settings" className="w-7 h-7 rounded-md grid place-items-center flex-shrink-0 transition-colors text-dim hover:text-white hover:bg-white/5"><Ico d={I.gear} /></button>
   <span className="w-px h-4 bg-border mx-1" />
   <button onClick={onProfile} title="Profile" className="flex items-center gap-2 px-2 py-1 rounded-md text-sm text-dim hover:text-white hover:bg-white/5 min-w-0"><span className="w-5 h-5 rounded-full bg-accent text-app grid place-items-center text-[10px] font-bold flex-shrink-0">{profile?.name?.[0]?.toUpperCase() || '?'}</span><span className="truncate max-w-[140px]">{profile?.name || 'Set up profile'}</span></button>
 </>
-function Sidebar({ page, go, profile, onProfile, onSettings, due, onPalette }) {
+function Sidebar({ page, go, profile, onProfile, onSettings, onProfiles, due, onPalette }) {
   const Btn = ([id, label, ic], n) => (
     <button key={id} onClick={() => go(id)} title={`${label} (Ctrl+${n + 1})`} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${page === id ? 'bg-accent text-app font-semibold' : 'text-dim hover:text-white hover:bg-white/5'}`}>
       <Ico d={ic} />{label}
@@ -71,9 +73,13 @@ function Sidebar({ page, go, profile, onProfile, onSettings, due, onPalette }) {
       <button onClick={onPalette} className="flex items-center gap-2 px-3 py-1.5 mb-2 rounded-lg text-xs text-dim border border-border bg-app hover:text-white"><Ico s={13} d={I.search} />Jump to…<span className="ml-auto text-[10px] font-mono">Ctrl K</span></button>
       {PAGES.map((e, n) => Btn(e, n))}
       <div className="text-[10px] uppercase tracking-[0.18em] text-dim px-3 pt-4 pb-1">Tools</div>
-      {TOOLS.map((e, n) => Btn(e, n + PAGES.length))}
+      {/* the role decides which tools exist: no Code for someone who does not write any */}
+      {TOOLS.filter(([id]) => profile?.tools?.includes(id) ?? true).map((e, n) => Btn(e, n + PAGES.length))}
       <div className="flex-1" />
-      <button onClick={onProfile} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-dim hover:text-white hover:bg-white/5"><span className="w-[15px] h-[15px] rounded-full bg-accent text-app grid place-items-center text-[9px] font-bold flex-shrink-0">{profile?.name?.[0]?.toUpperCase() || '?'}</span><span className="truncate">{profile?.name || 'Set up profile'}</span></button>
+      <div className="flex items-center gap-1">
+        <button onClick={onProfile} className="flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-dim hover:text-white hover:bg-white/5"><span className="w-[15px] h-[15px] rounded-full bg-accent text-app grid place-items-center text-[9px] font-bold flex-shrink-0">{profile?.name?.[0]?.toUpperCase() || '?'}</span><span className="truncate">{profile?.name || 'Set up profile'}</span></button>
+        <button onClick={onProfiles} title="Switch profile" aria-label="Switch profile" className="w-7 h-7 rounded-md grid place-items-center flex-shrink-0 text-dim hover:text-white hover:bg-white/5"><Ico s={14} d={<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 11 3 3-3 3"/></>} /></button>
+      </div>
       <button onClick={onSettings} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-dim hover:text-white hover:bg-white/5"><Ico d={I.gear} />Settings</button>
     </aside>
   )
@@ -88,13 +94,25 @@ export default function App() {
   const [tabs, setTabs] = useState([{ page: 'dashboard' }])
   const [settings, setSettings] = useState(null); const [settingsOpen, setSettingsOpen] = useState(false)
   const [profile, setProfile] = useState(null); const [editProfile, setEditProfile] = useState(false); const [stale, setStale] = useState('')
+  const [profiles, setProfiles] = useState(null); const [showProfiles, setShowProfiles] = useState(false) // the who-is-studying screen
   const [newStudy, setNewStudy] = useState(null) // { mode, prefill, then: pane|null }
   const [due, setDue] = useState(0); const [palette, setPalette] = useState(false); const [wsTool, setWsTool] = useState('chat')
 
   const reload = useCallback(async () => setStudies(await api.get('/api/studies')), [])
   const refreshDue = useCallback(() => api.get('/api/review').then(r => setDue(r.due || 0)).catch(() => {}), [])
   const loadSettings = useCallback(async () => { const s = await api.get('/api/settings'); setSettings(s); if (!s.hasKey) setSettingsOpen(true); return s }, [])
-  useEffect(() => { reload(); loadSettings(); api.get('/api/profile').then(p => { if (p.error) { setStale(p.error); p = {} } setProfile(p); if (!p.name && !localStorage.getItem('cram:onboarded')) { setEditProfile(true); localStorage.setItem('cram:onboarded', '1') } }) }, [reload, loadSettings])
+  // onboarding is decided by the server now (is there a profile with a name?), not a localStorage flag
+  useEffect(() => { reload(); loadSettings(); api.get('/api/profiles').then(setProfiles).catch(() => {}); api.get('/api/profile').then(p => { if (p.error) { setStale(p.error); p = {} } setProfile(p) }) }, [reload, loadSettings])
+  // Working out a role takes a minute or two and finishes on the server, so the open window has to go
+  // looking for it: poll while it is running, and re-check whenever the window is focused again —
+  // otherwise a role that landed while you were elsewhere never reaches the sidebar until a reload.
+  useEffect(() => {
+    const pull = () => api.get('/api/profile').then(p => { if (!p.error) setProfile(p) }).catch(() => {})
+    const onFocus = () => { if (!document.hidden) pull() }
+    window.addEventListener('focus', onFocus); document.addEventListener('visibilitychange', onFocus)
+    const t = profile?.roleStatus === 'pending' ? setInterval(pull, 5000) : null
+    return () => { if (t) clearInterval(t); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus) }
+  }, [profile?.roleStatus])
   useEffect(() => { const f = () => setSettingsOpen(true); window.addEventListener('cram:settings', f); return () => window.removeEventListener('cram:settings', f) }, [])
   useEffect(() => { if (current) localStorage.setItem('cram:study', current); else localStorage.removeItem('cram:study') }, [current])
   useEffect(() => { refreshDue() }, [refreshDue, page])
@@ -165,9 +183,12 @@ export default function App() {
     check(); const t = setInterval(check, 3e5); window.addEventListener('focus', check)
     return () => { clearInterval(t); window.removeEventListener('focus', check) }
   }, [])
+  // first run (no profile has a name yet) goes straight to onboarding; the picker is also opened from the account
+  const needsProfile = !!profiles && !profiles.list?.some(p => p.name && p.name !== 'Unnamed')
+  if (showProfiles || needsProfile) return <Profiles active={profiles?.active} list={profiles?.list || []} onClose={needsProfile ? null : () => setShowProfiles(false)} />
   return (
     <div className="h-screen flex bg-app p-2.5 gap-2.5">
-      {home && <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} due={due} onSettings={() => setSettingsOpen(true)} onPalette={() => setPalette(true)} />}
+      {home && <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} onProfiles={() => setShowProfiles(true)} due={due} onSettings={() => setSettingsOpen(true)} onPalette={() => setPalette(true)} />}
       <div className="flex-1 min-w-0 flex flex-col island overflow-hidden">
         <div className="order-last flex items-center gap-1 px-2 pt-1.5 pb-2 border-t border-border bg-app/40 overflow-x-auto flex-shrink-0" role="tablist">{/* order-last: the tabs sit at the bottom of the island */}
           {tabs.map((t, i) => {
@@ -208,7 +229,7 @@ export default function App() {
             {SLOTS.map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
             {!SLOTS.includes(page) && <div className="flex-1" />}
             <span className="w-px h-4 bg-border mx-1 flex-shrink-0" />
-            <div className="flex items-center gap-0.5 flex-shrink-0"><Account profile={profile} onProfile={() => setEditProfile(true)} onSettings={() => setSettingsOpen(true)} /></div>
+            <div className="flex items-center gap-0.5 flex-shrink-0"><Account profile={profile} onProfile={() => setEditProfile(true)} onSettings={() => setSettingsOpen(true)} onProfiles={() => setShowProfiles(true)} /></div>
           </div>
         )}
         <div className="flex-1 min-h-0 relative">
@@ -217,9 +238,9 @@ export default function App() {
               onOpen={(sid, tool) => openTool(sid, tool || 'study')} onOpenTool={openTool} onNew={(mode, prefill) => setNewStudy({ mode: mode || 'subject', prefill })} onDeleted={sid => { if (sid === current) setCurrent(null); setTabs(ts => ts.filter(t => t.sid !== sid)); setOpen(o => { const c = { ...o }; delete c[sid]; return c }); reload() }} />
           </div>
           {page === 'study' && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">{current ? 'Loading…' : 'Pick a study from Studies.'}</div>}
-          {Object.entries(GLOBAL).map(([t, Tool]) => (tabs.some(x => x.page === t) || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} active={page === t} openId={t === 'blog' ? blogOpen : undefined} /></div>)}
+          {Object.entries(GLOBAL).map(([t, Tool]) => (tabs.some(x => x.page === t) || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} active={page === t} openId={t === 'blog' ? blogOpen : undefined} profile={profile} /></div>)}
           {(tabs.some(x => x.page === 'notes') || page === 'notes') &&<div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} /></div>}
-          {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} /></div>}
+          {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} profile={profile} /></div>}
         </div>
       </div>
       <div id="ws-side" className={page === 'study' && study ? 'contents' : 'hidden'} />{/* the study tools card lands here: its own island beside the page, like the main sidebar */}

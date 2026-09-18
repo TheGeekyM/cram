@@ -14,7 +14,14 @@ app.use(express.static(path.join(__dirname, 'dist')));
 
 // ponytail: CRAM_DATA set by main.js to Electron userData; web mode keeps data next to the code
 const DATA = process.env.CRAM_DATA || path.join(__dirname, 'data');
-const STUDIES = path.join(DATA, 'studies');
+// Per-profile paths. They are `let` because activate() re-points them when the profile switches;
+// every reader below resolves them at call time, so nothing needs to know a switch happened.
+const profiles = require('./profiles');
+const roles = require('./roles');
+const rounds = require('./rounds');
+profiles.migrate(DATA); // moves a flat pre-profiles DATA into profiles/default; idempotent, rename-only
+let PROFILE_DIR = profiles.dirOf(DATA, profiles.activeId(DATA));
+let STUDIES = path.join(PROFILE_DIR, 'studies');
 fs.mkdirSync(STUDIES, { recursive: true });
 auth.init(DATA, null); // main.js re-inits with safeStorage
 const SETTINGS = path.join(DATA, 'settings.json');
@@ -23,7 +30,22 @@ const study = id => JSON.parse(fs.readFileSync(path.join(STUDIES, id, 'study.jso
 const save = s => fs.writeFileSync(path.join(STUDIES, s.id, 'study.json'), JSON.stringify(s));
 // Generic Interview / Code sessions live in a hidden built-in study, so every /api/studies/:id route serves them too.
 const GENERAL = '_general';
-if (!fs.existsSync(path.join(STUDIES, GENERAL, 'study.json'))) { fs.mkdirSync(path.join(STUDIES, GENERAL), { recursive: true }); save({ id: GENERAL, general: true, title: 'General practice', subject: 'job interview and coding practice', hasPdf: false, createdAt: Date.now(), updatedAt: Date.now(), chat: [], interviews: [], quizzes: [], challenges: [] }); }
+// Point every per-profile path at one profile's folder, and make sure it is ready to use. Called once
+// at boot (below, after the later `let`s exist) and again whenever the picker switches profile.
+function activate(pid) {
+  PROFILE_DIR = profiles.dirOf(DATA, pid);
+  STUDIES = path.join(PROFILE_DIR, 'studies');
+  PROFILE = path.join(PROFILE_DIR, 'profile.json');
+  COACH = path.join(PROFILE_DIR, 'coach.json');
+  NOTES = path.join(PROFILE_DIR, 'notes.json');
+  STORIES = path.join(PROFILE_DIR, 'stories.json');
+  fs.mkdirSync(STUDIES, { recursive: true });
+  // every profile gets its own hidden study, so General practice sessions never cross profiles
+  if (!fs.existsSync(path.join(STUDIES, GENERAL, 'study.json'))) { fs.mkdirSync(path.join(STUDIES, GENERAL), { recursive: true }); save({ id: GENERAL, general: true, title: 'General practice', subject: 'job interview and coding practice', hasPdf: false, createdAt: Date.now(), updatedAt: Date.now(), chat: [], interviews: [], quizzes: [], challenges: [] }); }
+  // A profile made before this question existed — or one whose derivation failed — is tailored when it
+  // is opened. deriveRole is a no-op unless the answers actually changed, so switching costs nothing.
+  profiles.deriveRole(DATA, pid, { json, NO_STUDY });
+}
 const MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-haiku-4-5'];
 // one line per Claude call: what, which provider/model, then how long it took
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), '[claude]', ...a);
@@ -61,7 +83,7 @@ async function client() {
   if (tok) return { c: new Anthropic({ authToken: tok }), betas: ['server-side-fallback-2026-07-01', auth.OAUTH_BETA] };
   return { c: new Anthropic({ apiKey: settings().apiKey || process.env.ANTHROPIC_API_KEY }), betas: ['server-side-fallback-2026-07-01'] };
 }
-const INTERVIEWER = `You are Cram, a seasoned hiring manager and interview coach who has run hundreds of real interviews at strong tech companies. Be realistic, fair and specific. Use Markdown.`;
+const INTERVIEWER = `You are Cram, a seasoned interviewer and coach who has run hundreds of real interviews and assessments in the learner's own field, whatever that field is. Be realistic, fair and specific. Use Markdown.`;
 const SYSTEM = `You are Cram, a sharp, friendly study tutor. Teach from the provided material; where it is silent, use solid general knowledge and say so. Be concrete, use examples, keep answers tight. Use Markdown.`;
 // How deep to pitch everything (chat, interviews, challenges, chapter plans); set when the study is created
 const LEVEL = { beginner: 'a complete beginner', mid: 'at an intermediate level, past the basics', expert: 'an advanced learner who wants depth and edge cases' };
@@ -69,7 +91,9 @@ const LEVEL = { beginner: 'a complete beginner', mid: 'at an intermediate level,
 function context(s) {
   const pdf = path.join(STUDIES, s.id, 'source.pdf');
   if (s.general) return { system: INTERVIEWER, prefix: [], pdf: null };
-  const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.${LEVEL[s.level] ? ` The learner is ${LEVEL[s.level]}: pitch the depth, the vocabulary and the examples for that level.` : ''}`;
+  // the learner's level and their role both shape every answer: a nutritionist asking about "absorption"
+  // wants clinical examples, not database ones
+  const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.${LEVEL[s.level] ? ` The learner is ${LEVEL[s.level]}: pitch the depth, the vocabulary and the examples for that level.` : ''} ${roles.roleContext(readJson(PROFILE, {}))}`.trim();
   if (!fs.existsSync(pdf)) return { system: `${SYSTEM}\n${intro}`, prefix: [], pdf: null };
   return { system: `${SYSTEM}\n${intro} The study material is the attached PDF.`, pdf, prefix: [
     { role: 'user', content: [
@@ -102,21 +126,35 @@ async function streamText0(res, s, messages, extra) {
   } catch (e) { if (!ac.signal.aborted) res.write(`\n\n**Error:** ${e.message}`); }
   res.end(); return text;
 }
-// opts.web: allow web search (real links); opts.signal: abort when the client goes away
-const json = (s, prompt, extra, opts) => timed(`json ${prompt.slice(0, 40).replace(/\s+/g, ' ')}…`, s, () => json0(s, prompt, extra, opts));
+// opts.web: allow web search (real links); opts.signal: abort when the client goes away; opts.onDelta: raw text as it arrives
+// app.json is a test seam: a harness can boot this server and answer model calls itself, so the routes
+// can be exercised end to end without a real call (they take 16-134s and cost money).
+const json = (s, prompt, extra, opts) => timed(`json ${prompt.slice(0, 40).replace(/\s+/g, ' ')}…`, s, () => (app.json || json0)(s, prompt, extra, opts));
 async function json0(s, prompt, extra, opts = {}) {
   let text;
   if (useCli()) {
     const { system, pdf } = context(s);
-    const r = await cli.stream({ system, messages: [{ role: 'user', content: prompt }], model: settings().model || 'claude-opus-5', pdf, web: opts.web, signal: opts.signal });
+    const r = await cli.stream({ system, messages: [{ role: 'user', content: prompt }], model: settings().model || 'claude-opus-5', pdf, web: opts.web, signal: opts.signal, onDelta: opts.onDelta });
     if (!r.ok) throw new Error(r.message); text = r.text;
   } else {
     const { c, betas } = await client();
     const web = opts.web ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }] } : {};
-    const r = await c.beta.messages.create({ ...req(s, [{ role: 'user', content: prompt }], { ...web, ...extra }), betas }, { signal: opts.signal });
+    const p = { ...req(s, [{ role: 'user', content: prompt }], { ...web, ...extra }), betas };
+    const r = opts.onDelta ? await c.beta.messages.stream(p, { signal: opts.signal }).on('text', opts.onDelta).finalMessage() : await c.beta.messages.create(p, { signal: opts.signal });
     text = r.content.filter(b => b.type === 'text').map(b => b.text).join('');
   }
-  return require('./jsonish').parse(text); // tolerant: prose around the JSON, raw quotes inside strings
+  // tolerant: prose around the JSON, raw quotes inside strings. When even that fails the reply used to
+  // vanish with the exception — keep it, and show the text around the break, or the next failure is
+  // just as blind as this one was.
+  try { return require('./jsonish').parse(text); }
+  catch (e) {
+    try { fs.writeFileSync(path.join(DATA, 'last-bad-reply.txt'), text); } catch {}
+    const at = +(/position (\d+)/.exec(e.message)?.[1]);
+    log(`bad JSON in a ${text.length}-char reply: ${e.message}`);
+    if (Number.isFinite(at)) log(`  around it: …${JSON.stringify(text.slice(Math.max(0, at - 120), at + 80))}`);
+    log(`  full reply saved to ${path.join(DATA, 'last-bad-reply.txt')}`);
+    throw e;
+  }
 }
 
 // ---------- studies ----------
@@ -142,20 +180,24 @@ app.delete('/api/studies/:id', (req, res) => { fs.rmSync(path.join(STUDIES, req.
 const touch = s => { s.updatedAt = Date.now(); save(s); };
 
 // ---------- profile + dashboard + coach ----------
-const PROFILE = path.join(DATA, 'profile.json'), COACH = path.join(DATA, 'coach.json');
+// let, not const: activate() re-points these at the active profile's folder (see profiles.js)
+let PROFILE = path.join(DATA, 'profile.json'), COACH = path.join(DATA, 'coach.json');
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f)); } catch { return d; } };
-app.get('/api/profile', (req, res) => res.json(readJson(PROFILE, null) || {}));
+// tools and rounds are computed here, so the renderer never has to know the fallback rules
+app.get('/api/profile', (req, res) => { const p = readJson(PROFILE, null) || {}; res.json({ ...p, id: profiles.activeId(DATA), tools: roles.toolsFor(p.role, p.tools), rounds: roles.roundsFor(p.role) }); });
 app.post('/api/profile', (req, res) => {
-  const keep = ['name', 'career', 'goal', 'hoursPerWeek', 'notes', 'examDate', 'examName'], p = { ...(readJson(PROFILE, {})), updatedAt: Date.now() };
-  for (const k of keep) if (k in req.body) p[k] = k === 'hoursPerWeek' ? Math.max(1, Math.min(80, +req.body[k] || 5)) : k === 'examDate' ? (/^\d{4}-\d{2}-\d{2}$/.test(req.body[k] || '') ? req.body[k] : '') : String(req.body[k] || '').slice(0, 400);
+  // one allowlist, shared with the onboarding form in profiles.js, so they can never disagree
+  const p = profiles.cleanProfile(req.body, readJson(PROFILE, {}));
   fs.writeFileSync(PROFILE, JSON.stringify(p)); res.json(p);
+  // a new job or a new situation re-tailors the app; editing hours or a name does not
+  if (profiles.needsDerive(p)) profiles.deriveRole(DATA, profiles.activeId(DATA), { json, NO_STUDY });
 });
 const localDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 // every timed session of a study as one event; score is 0..1 or null
 function events(s) {
   const ev = [];
   for (const q of s.quizzes) ev.push({ kind: 'quiz', id: q.id, title: q.title, at: q.at, secs: q.elapsed || 0, done: q.status === 'graded' || (!q.questions && q.score != null), score: q.score != null && q.total ? q.score / q.total : null });
-  for (const i of s.interviews || []) ev.push({ kind: 'interview', id: i.id, title: i.mode === 'real' ? `${ROUNDS[i.round] || i.round} interview · ${i.role}` : `${i.difficulty} interview · ${i.language}`, at: i.at, secs: i.elapsed || 0, done: i.status === 'ended', score: i.turns.length ? i.turns.reduce((a, t) => a + (t.score || 0), 0) / i.turns.length / 10 : null, n: i.turns.length });
+  for (const i of s.interviews || []) ev.push({ kind: 'interview', id: i.id, title: i.mode === 'real' ? `${rounds.resolve(i).label} interview · ${i.role}` : `${i.difficulty} interview · ${i.language}`, at: i.at, secs: i.elapsed || 0, done: i.status === 'ended', score: i.turns.length ? i.turns.reduce((a, t) => a + (t.score || 0), 0) / i.turns.length / 10 : null, n: i.turns.length });
   for (const c of s.challenges) ev.push({ kind: 'code', id: c.id, title: c.title, at: c.at, secs: c.elapsed || 0, done: c.status !== 'open', score: c.passed != null && c.total ? c.passed / c.total : null });
   return ev.map(e => ({ ...e, studyId: s.id, study: s.title }));
 }
@@ -188,7 +230,8 @@ app.post('/api/coach', async (req, res) => {
 Today: ${localDay(Date.now())}. Streak: ${d.streak} days. This week: ${d.weekMinutes} minutes. Total: ${d.totalMinutes} minutes.
 ${app.locals.coachContext?.() || ''}
 Studies:\n${stats}\nRecent sessions:\n${d.events.slice(0, 8).map(e => `- ${localDay(e.at)} ${e.kind} "${e.title}" in ${e.study}: ${e.score == null ? 'not scored' : Math.round(e.score * 100) + '%'}${e.done ? '' : ' (unfinished)'}`).join('\n') || '- none'}
-The tools that exist are: interview (adaptive oral exam), code challenge, review (spaced-repetition flashcards and missed questions) and ask (chat about the material). There is no quiz tool; never suggest a quiz. Never mention ids in any text field (use studyId fields for that). Be concrete and honest; base advice on the numbers (weak scores, neglected studies, unfinished sessions, gap between goal and what they study). Address them by first name. Respond with ONLY JSON: {"headline": string (one motivating line, max 12 words), "next": {"studyId": string|null, "title": string, "why": string (1-2 lines), "tool": "interview"|"code"|"ask"|"review"|"new", "topic": string}, "todos": [4-6 of {"text": string, "tool": "interview"|"code"|"ask"|"review"|"new", "studyId": string|null}], "tips": [3 short concrete tips to get better, each mentioning a specific study or habit], "suggestNew": [2-3 of {"title": string, "subject": string (one-line scope), "why": string}] (subjects worth adding given their goal), "nudge": string (one-line reminder to keep going)}`;
+${roles.roleContext(p)}
+The tools that exist are: ${roles.toolSentence(p)}. There is no quiz tool; never suggest a quiz. Never mention ids in any text field (use studyId fields for that). Be concrete and honest; base advice on the numbers (weak scores, neglected studies, unfinished sessions, gap between goal and what they study). Address them by first name. Respond with ONLY JSON: {"headline": string (one motivating line, max 12 words), "next": {"studyId": string|null, "title": string, "why": string (1-2 lines), "tool": "interview"|"code"|"ask"|"review"|"new", "topic": string}, "todos": [4-6 of {"text": string, "tool": "interview"|"code"|"ask"|"review"|"new", "studyId": string|null}], "tips": [3 short concrete tips to get better, each mentioning a specific study or habit], "suggestNew": [2-3 of {"title": string, "subject": string (one-line scope), "why": string}] (subjects worth adding given their goal), "nudge": string (one-line reminder to keep going)}`;
   try { const plan = await json(NO_STUDY, prompt); fs.writeFileSync(COACH, JSON.stringify({ key, at: Date.now(), plan })); res.json({ ...plan, at: Date.now() }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -196,7 +239,7 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
 // ---------- notes (same semantics as aidle's notes:* IPC handlers) ----------
 const tree = import('./src/core/notesTree.mjs'); // ESM shared with the renderer; ponytail: one dynamic import, awaited per call
 // notes are global, not per study. Until the global file exists, reads fold in the old per-study notes.json files.
-const NOTES = path.join(DATA, 'notes.json');
+let NOTES = path.join(DATA, 'notes.json'); // re-pointed by activate()
 const loadNotes = () => { try { return JSON.parse(fs.readFileSync(NOTES, 'utf8')); } catch { return fs.readdirSync(STUDIES).flatMap(id => { try { return JSON.parse(fs.readFileSync(path.join(STUDIES, id, 'notes.json'), 'utf8')); } catch { return []; } }); } };
 const saveNotes = (_, notes) => fs.writeFileSync(NOTES, JSON.stringify(notes));
 app.post('/api/notes/list', async (req, res) => {
@@ -276,24 +319,9 @@ app.delete('/api/studies/:id/chat',(req, res) => { const s = study(req.params.id
 // ---------- interview (endless wizard: one question at a time, graded, next question built on the answers) ----------
 const findIv = (s, iid) => (s.interviews ||= []).find(i => i.id === iid);
 const nextQ = n => ({ q: n.q, type: n.type === 'choice' && n.choices?.length ? 'choice' : 'text', choices: n.choices || null, answerIndex: n.answer ?? null, ...(n.topic ? { topic: String(n.topic).slice(0, 60) } : {}), ...(n.followUp ? { followUp: true } : {}) });
-// Real interview (General practice): one round type for a target role, open answers only, follow-ups, rubric grading.
-const ROUNDS = { technical: 'Technical', behavioral: 'Behavioral', situational: 'Situational', management: 'Management', 'system-design': 'System design', architecture: 'Architecture' };
-const RUBRICS = {
-  technical: ['Correctness', 'Depth', 'Trade-offs', 'Clarity'],
-  behavioral: ['Situation & task', 'Actions', 'Result & impact', 'Ownership', 'Clarity'],
-  situational: ['Judgment', 'Prioritization', 'Stakeholders', 'Communication'],
-  management: ['People leadership', 'Delivery', 'Conflict handling', 'Strategy', 'Communication'],
-  'system-design': ['Requirements', 'High-level design', 'Scalability', 'Trade-offs', 'Communication'],
-  architecture: ['Requirements', 'Architecture choices', 'Non-functional needs', 'Trade-offs', 'Communication'],
-};
-const ROUND_GUIDE = {
-  technical: 'Probe real knowledge for the role: concepts, how things work under the hood, debugging, trade-offs. Mix breadth and depth.',
-  behavioral: 'Ask "Tell me about a time…" questions on competencies (ownership, conflict, failure, influence, delivery). Expect STAR answers; follow up on vague parts, the candidate\'s own actions and measurable results.',
-  situational: 'Pose realistic hypothetical workplace scenarios for the role ("What would you do if…"). Follow up by changing the constraints.',
-  management: 'Cover hiring, growing and managing people, underperformers, prioritization, delivery under pressure and cross-team influence, calibrated to the seniority.',
-  'system-design': 'Run ONE design problem as a staged interview: 1) clarify requirements and scale, 2) API and data model, 3) high-level components, 4) deep dive on a bottleneck, 5) scaling, failure modes and trade-offs. Move to the next stage only once the current one is covered; stay on the same problem for the whole interview.',
-  architecture: 'Run an architecture discussion on ONE realistic system for the role: context and constraints, architecture style, integration and data flow, non-functional requirements (security, reliability, cost, evolvability), then decisions and trade-offs. Stay on the same system across stages.',
-};
+// Real interview (General practice): one round for a target role, open answers, follow-ups, rubric grading.
+// The rounds themselves — the six built-in ones and whatever a profile's role brings — live in rounds.js,
+// and every prompt here resolves through rounds.resolve(iv). Nothing is defined twice.
 // Arabic is spoken Egyptian colloquial: formal فصحى sounds stiff read aloud, and real Egyptian interviewers mix in English tech terms
 const langRule = l => /arab/i.test(l) ? 'Language: Egyptian colloquial Arabic (عامية مصرية). Talk like a real Egyptian interviewer, in a natural spoken style, not formal فصحى and never like a news anchor: short sentences, everyday words, and now and then a natural filler where a person would pause (يعني، طيب، بص، خلينا نشوف). Keep technical terms (API, cache, database, deployment…) in English. Write every question, choice and feedback this way.' : `Language: ${l}. Write every question, choice and feedback in ${l}.`;
 // interviewer manner, picked when the round starts
@@ -303,7 +331,7 @@ const PERSONAS = {
   tough: 'Your manner: demanding and fast-paced, like a bar-raiser. Short reactions, sharp follow-ups on anything vague, push on trade-offs and numbers. Never rude.\n',
 };
 // ---------- STAR story bank: the candidate's prepared stories, used by behavioral-style rounds and their coaching ----------
-const STORIES = path.join(DATA, 'stories.json');
+let STORIES = path.join(DATA, 'stories.json'); // re-pointed by activate()
 const loadStories = () => readJson(STORIES, []);
 app.get('/api/stories', (req, res) => res.json(loadStories()));
 app.post('/api/stories', (req, res) => {
@@ -319,14 +347,24 @@ const storiesFor = iv => {
   const L = ['behavioral', 'situational', 'management'].includes(iv.round) ? loadStories() : [];
   return L.length ? `The candidate prepared these STAR stories. Now and then ask them to walk you through one that fits, and probe it like a real interviewer (their own part, the numbers, what they would do differently):\n${L.slice(0, 12).map(x => `- "${x.title}"${x.skills.length ? ` (${x.skills.join(', ')})` : ''}: ${cut(x.situation, 160)} → ${cut(x.result, 120)}`).join('\n')}\n` : '';
 };
-const realBase = iv => `You are interviewing a candidate in a real ${ROUNDS[iv.round] || iv.round} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)}
-${ROUND_GUIDE[iv.round] || ROUND_GUIDE.technical}
+const realBase = iv => `You are interviewing a candidate in a real ${rounds.resolve(iv).label} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)}
+${rounds.resolve(iv).guide}
 ${PERSONAS[iv.persona] || ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
-const ivBase = iv => iv.mode === 'real' ? realBase(iv) : `You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. ${langRule(iv.language)}${iv.focus ? ` Ask only about ${iv.focus.title}${iv.focus.from ? ` (PDF pages ${iv.focus.from}${iv.focus.to ? `-${iv.focus.to}` : ' onwards'})` : ''}.` : ''}
+// A consultation is not an interview: Cram is the person in front of them — a patient, a client, a
+// customer — and the learner is the professional running the encounter. Same turns, grading and rubric
+// machinery; only who is speaking changes.
+const consultBase = iv => {
+  const r = rounds.resolve(iv), who = iv.clientWord || 'client';
+  return `You are role-playing a ${who} in a consultation with a ${iv.seniority} ${iv.role}. You are NOT an interviewer: you are the ${who}. ${langRule(iv.language)}
+${r.guide}
+Stay in character for every turn. Answer what the professional actually asks, volunteer what this person would naturally volunteer, and react to their explanations as this person would. Never grade, coach, hint, or tell them what to ask next.
+`;
+};
+const ivBase = iv => iv.mode === 'real' ? (rounds.resolve(iv).kind === rounds.CONSULT ? consultBase(iv) : realBase(iv)) :`You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. ${langRule(iv.language)}${iv.focus ? ` Ask only about ${iv.focus.title}${iv.focus.from ? ` (PDF pages ${iv.focus.from}${iv.focus.to ? `-${iv.focus.to}` : ' onwards'})` : ''}.` : ''}
 ${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1} (${t.type}): ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}`;
 // Two separate calls: grading is what the learner waits for; the next question is fetched behind the feedback.
 const hintNote = p => p.hint ? `\nBefore answering they asked for a hint and got: "${p.hint}". Take 2 points off the overall score for needing it, and mention that in the feedback.` : '';
-const gradePrompt = (iv, answer) => iv.mode === 'real' ? `${ivBase(iv)}Current question: ${iv.pending.q}${hintNote(iv.pending)}\nThe candidate answered: ${answer || '(no answer)'}\n\nGrade it the way a calibrated interviewer for a ${iv.seniority} ${iv.role} would. Feedback in 3-6 lines: what landed, what was missing or weak, and what a strong ${iv.seniority}-level answer would include. Score each rubric criterion 0-10: ${RUBRICS[iv.round].join(', ')}. Respond with ONLY JSON: {"feedback": string, "score": number 0-10 overall, "rubric": {${RUBRICS[iv.round].map(k => `"${k}": number`).join(', ')}}}`
+const gradePrompt = (iv, answer) => iv.mode === 'real' ? `${ivBase(iv)}Current question: ${iv.pending.q}${hintNote(iv.pending)}\nThe candidate answered: ${answer || '(no answer)'}\n\nGrade it the way a calibrated interviewer for a ${iv.seniority} ${iv.role} would. Feedback in 3-6 lines: what landed, what was missing or weak, and what a strong ${iv.seniority}-level answer would include. Score each rubric criterion 0-10: ${rounds.resolve(iv).rubric.join(', ')}. Respond with ONLY JSON: {"feedback": string, "score": number 0-10 overall, "rubric": {${rounds.resolve(iv).rubric.map(k => `"${k}": number`).join(', ')}}}`
   : `${ivBase(iv)}Current question (${iv.pending.type}): ${iv.pending.q}${hintNote(iv.pending)}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}\nCorrect choice: ${'ABCD'[iv.pending.answerIndex] || '?'}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Respond with ONLY JSON: {"feedback": string, "correct": boolean, "score": number}`;
 const followUps = iv => { let n = 0; for (let i = iv.turns.length - 1; i >= 0 && iv.turns[i].followUp; i--) n++; return n; };
 const nextPrompt = iv => iv.mode === 'real' ? `${ivBase(iv)}${iv.turns.length ? `Ask your next question like a real interviewer. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}. Otherwise move to a new topic or the next stage. Never repeat a question.` : 'Open the round with your first question (a one-line greeting before it is fine).'} Talk as in a live conversation with a real person. You may open with a short reaction to their last answer that never reveals whether it was right, but make it human and specific: pick up something they actually said (a word, an example, a tool they named), or bridge naturally into the next topic, or skip the reaction and just ask. Vary it every time: look at how your earlier questions in the transcript began and never start the same way twice, and do not fall back on stock fillers (تمام / واخد بالي / حلو / Got it / Great) as a habit. No grading, no hints, no multiple choice. Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`
@@ -335,9 +373,14 @@ app.post('/api/studies/:id/interviews', async (req, res) => {
   const s = study(req.params.id); const { difficulty = 'medium', language = 'English', round, role, seniority = 'mid' } = req.body;
   const iv = { id: Date.now().toString(36), at: Date.now(), difficulty: String(difficulty).slice(0, 20), language: String(language).slice(0, 30), status: 'open', elapsed: 0, turns: [], pending: null };
   if (s.general) { // real interview: a round type for a target role; difficulty mirrors seniority for the older views
-    if (!RUBRICS[round]) return res.status(400).json({ error: 'unknown round' });
+    // the round may be one this profile's role brought (a consultation, say), or a built-in one
+    const prof = readJson(PROFILE, {}) || {};
+    const picked = rounds.pick(round, prof.role?.rounds);
+    if (!picked) return res.status(400).json({ error: 'unknown round' });
     if (!String(role || '').trim()) return res.status(400).json({ error: 'Say which role you are interviewing for.' });
-    Object.assign(iv, { mode: 'real', round, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral' });
+    // snapshot the round onto the interview: re-deriving or editing the role later must never change
+    // how a session already under way is run or graded
+    Object.assign(iv, { mode: 'real', ...picked, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral', ...(prof.role?.clientWord ? { clientWord: prof.role.clientWord } : {}) });
   } else if (req.body.focus?.title) iv.focus = { title: String(req.body.focus.title).slice(0, 160), from: Math.round(+req.body.focus.from) || null, to: Math.round(+req.body.focus.to) || null };
   try { iv.pending = nextQ(await json(s, nextPrompt(iv))); (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -356,7 +399,7 @@ app.post('/api/studies/:id/interviews/:iid/answer', async (req, res) => {
 // ---------- around the interview: hints, the panel's hire decision, a strong model answer, answering a question again ----------
 const graded = (iv, r) => {
   const score = Math.max(0, Math.min(10, Math.round(+r.score || 0)));
-  const rubric = iv.mode === 'real' && r.rubric ? Object.fromEntries(RUBRICS[iv.round].filter(k => Number.isFinite(+r.rubric[k]) && r.rubric[k] !== null && r.rubric[k] !== '').map(k => [k, Math.max(0, Math.min(10, Math.round(+r.rubric[k])))])) : undefined;
+  const rubric = iv.mode === 'real' && r.rubric ? Object.fromEntries(rounds.resolve(iv).rubric.filter(k => Number.isFinite(+r.rubric[k]) && r.rubric[k] !== null && r.rubric[k] !== '').map(k => [k, Math.max(0, Math.min(10, Math.round(+r.rubric[k])))])) : undefined;
   return { score, correct: iv.mode === 'real' ? score >= 6 : !!r.correct, ...(rubric ? { rubric } : {}) };
 };
 // write back into a fresh read: these calls take a while and the session may have been saved meanwhile
@@ -386,7 +429,7 @@ app.post('/api/studies/:id/interviews/:iid/turns/:i/model', async (req, res) => 
   if (t.model) return res.json(iv);
   try {
     const r = await json(s, `${ivBase({ ...iv, turns: iv.turns.slice(0, i) })}Question: ${t.q}\n${iv.mode === 'real'
-      ? `Write the answer a strong ${iv.seniority} ${iv.role} candidate would say out loud in the room: first person, natural spoken style, about 120-220 words${iv.round === 'behavioral' ? ', as a STAR story' : ''}. It should score 9-10 on: ${RUBRICS[iv.round].join(', ')}.`
+      ? `Write the answer a strong ${iv.seniority} ${iv.role} candidate would say out loud in the room: first person, natural spoken style, about 120-220 words${iv.round === 'behavioral' ? ', as a STAR story' : ''}. It should score 9-10 on: ${rounds.resolve(iv).rubric.join(', ')}.`
       : 'Write the ideal answer a top student would say out loud: clear, complete and concise, 60-150 words.'} Respond with ONLY JSON: {"answer": string}`);
     res.json(reread(req, iv2 => { if (iv2.turns[i]) iv2.turns[i].model = String(r.answer || ''); }));
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -555,7 +598,11 @@ app.post('/api/studies/:id/challenge/:cid/review', async (req, res) => {
 });
 
 require('./reminderStore')(app, { DATA });
-require('./features')(app, { study, save, touch, json, context, DATA, STUDIES, PROFILE, COACH, NO_STUDY, readJson, localDay, events, loadNotes, saveNotes, makeChallenge });
+activate(profiles.activeId(DATA)); // here, not at the top: every per-profile `let` above must exist first
+profiles.routes(app, { DATA, activate, json, NO_STUDY });
+// features.js gets getters, not paths: a value captured at mount would freeze it on the boot profile
+require('./features')(app, { study, save, touch, json, context, DATA, NO_STUDY, readJson, localDay, events, loadNotes, saveNotes, makeChallenge,
+  profileDir: () => PROFILE_DIR, studiesDir: () => STUDIES, profileFile: () => PROFILE, coachFile: () => COACH });
 
 module.exports = app;
 if (require.main === module) app.listen(3000, '127.0.0.1', () => console.log('http://localhost:3000'));

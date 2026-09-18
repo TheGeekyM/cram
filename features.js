@@ -7,6 +7,7 @@ const os = require('os');
 const express = require('express');
 const { execFile, spawn } = require('child_process');
 const { marked } = require('marked');
+const roles = require('./roles');
 
 const DAY = 864e5;
 const STEPS = [1, 3, 7, 14, 30, 60, 120]; // review intervals, days
@@ -22,10 +23,11 @@ const strip = h => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, '
 const esc = t => String(t ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 
 module.exports = (app, ctx) => {
-  const { study, save, touch, json, DATA, STUDIES, PROFILE, COACH, NO_STUDY, readJson, localDay, events, loadNotes, saveNotes, makeChallenge } = ctx;
-  const file = n => path.join(DATA, n);
+  const { study, save, touch, json, DATA, NO_STUDY, readJson, localDay, events, loadNotes, saveNotes, makeChallenge, profileDir, studiesDir, profileFile, coachFile } = ctx;
+  // resolved per call, never captured: switching profile re-points them without remounting anything
+  const file = n => path.join(profileDir(), n);
   const write = (n, v) => fs.writeFileSync(file(n), JSON.stringify(v));
-  const allStudies = () => fs.readdirSync(STUDIES).map(id => { try { return study(id); } catch { return null; } }).filter(Boolean);
+  const allStudies = () => fs.readdirSync(studiesDir()).map(id => { try { return study(id); } catch { return null; } }).filter(Boolean);
   const findStudy = (req, res) => { try { return study(req.params.id); } catch { res.status(404).json({ error: 'no such study' }); return null; } };
 
   // ---------- review queue ----------
@@ -79,7 +81,7 @@ module.exports = (app, ctx) => {
 
   // ---------- extra coach context: exam, goals, review queue, the learner's own notes ----------
   app.locals.coachContext = () => {
-    const p = readJson(PROFILE, {}), r = loadReview(), now = Date.now();
+    const p = readJson(profileFile(), {}), r = loadReview(), now = Date.now();
     const days = p.examDate ? Math.ceil((new Date(`${p.examDate}T00:00`) - now) / DAY) : null;
     const goals = allStudies().filter(s => s.goal).map(s => `- ${s.title}: goal ${s.goal.target} ${GOAL_KINDS[s.goal.kind]}`);
     let notes = [];
@@ -105,13 +107,14 @@ module.exports = (app, ctx) => {
   app.post('/api/report', async (req, res) => {
     const all = readJson(file('reports.json'), {}), k = weekKey();
     if (all[k] && !req.body?.force) return res.json({ week: k, report: all[k] });
-    const start = new Date(`${k}T00:00`).getTime(), last = weekStats(start - 7 * DAY, start), prev = weekStats(start - 14 * DAY, start - 7 * DAY), p = readJson(PROFILE, {});
+    const start = new Date(`${k}T00:00`).getTime(), last = weekStats(start - 7 * DAY, start), prev = weekStats(start - 14 * DAY, start - 7 * DAY), p = readJson(profileFile(), {});
     const prompt = `Write the weekly study report for ${p.name ? p.name.split(' ')[0] : 'the learner'} for the week ending ${localDay(start - DAY)}. Their goal: ${p.goal || 'not given'}. Target: ${p.hoursPerWeek || 5} hours/week.
 Last week: ${last.minutes} min, ${last.sessions} sessions, average score ${last.avg ?? 'n/a'}%. Per study: ${last.perStudy}.
 ${last.list.join('\n') || '- no sessions'}
 The week before: ${prev.minutes} min, ${prev.sessions} sessions, average score ${prev.avg ?? 'n/a'}%. Per study: ${prev.perStudy}.
 ${app.locals.coachContext()}
-The tools that exist are: interview (adaptive oral exam), code challenge, review (spaced-repetition flashcards and missed questions) and ask (chat about the material). There is no quiz tool; never suggest a quiz. Compare the two weeks honestly and use the numbers. If last week had no study, say so plainly and make the focus a small restart. Address them by first name. Never mention ids. Respond with ONLY JSON: {"summary": string (2 sentences), "improved": [0-3 strings], "slipped": [0-3 strings], "focus": string (one concrete focus for this week)}`;
+${roles.roleContext(p)}
+The tools that exist are: ${roles.toolSentence(p)}. There is no quiz tool; never suggest a quiz. Compare the two weeks honestly and use the numbers. If last week had no study, say so plainly and make the focus a small restart. Address them by first name. Never mention ids. Respond with ONLY JSON: {"summary": string (2 sentences), "improved": [0-3 strings], "slipped": [0-3 strings], "focus": string (one concrete focus for this week)}`;
     try {
       const r = await json(NO_STUDY, prompt);
       all[k] = { ...r, stats: { minutes: last.minutes, sessions: last.sessions, avg: last.avg, prevMinutes: prev.minutes, prevSessions: prev.sessions, prevAvg: prev.avg }, at: Date.now() };
@@ -121,7 +124,7 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
 
   // ---------- plan board: to-dos placed on days ----------
   const TOOLS = ['ask', 'quiz', 'interview', 'code', 'review', 'notes'];
-  app.get('/api/plan', (req, res) => res.json({ items: readJson(file('plan.json'), []), coach: readJson(COACH, null)?.plan?.todos || [] }));
+  app.get('/api/plan', (req, res) => res.json({ items: readJson(file('plan.json'), []), coach: readJson(coachFile(), null)?.plan?.todos || [] }));
   app.post('/api/plan', (req, res) => {
     const items = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 500).map(x => ({
       id: String(x.id || Math.random().toString(36).slice(2)), text: String(x.text || '').slice(0, 300), tool: TOOLS.includes(x.tool) ? x.tool : '',
@@ -167,22 +170,30 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
   app.delete('/api/blog/:aid', (req, res) => { write(BLOG, loadBlog().filter(x => x.id !== req.params.aid)); res.json({ ok: true }); });
 
   // one article: body, then its discussion. Returns the saved article; throws so the caller can report it.
-  async function writeArticle(s, avoid = [], signal, onStage = () => {}, lang = '') {
+  // emit: what the generate panel sees ({stage}, then throttled {progress} while the model writes)
+  async function writeArticle(s, avoid = [], signal, emit = () => {}, lang = '') {
+    // the model's raw JSON as it streams: a rough count plus its last line, enough to watch it move
+    const live = count => { let text = '', last = 0; return d => {
+      text += d; if (Date.now() - last < 400) return; last = Date.now();
+      emit({ progress: { [count]: count === 'words' ? text.split(/\s+/).length : (text.match(/"author"\s*:/g) || []).length,
+        tail: text.slice(-180).replace(/\\n/g, ' ').replace(/\\"/g, '"').replace(/\s+/g, ' ').trim() } });
+    }; };
     const level = { beginner: 'a beginner', mid: 'someone past the basics', expert: 'an experienced practitioner' }[s.level];
+    const who = roles.roleContext(readJson(profileFile(), {})); // so a nutritionist's article is not written for engineers
     const b = await json(s, `Write a deep, practical article for someone studying "${esc(s.title)}"${s.subject ? ` (${esc(s.subject)})` : ''}.${level ? ` The reader is ${level}.` : ''}
-It must be a 10 minute read at minimum: 1800-2400 words. Teach one specific, worthwhile idea from this subject in depth — not an overview of everything. Use concrete examples, a worked scenario, and short code or diagrams where they earn their place. Markdown, with ## sections. No preamble about what the article will cover.
+It must be a 10 minute read at minimum: 1800-2400 words. Teach one specific, worthwhile idea from this subject in depth — not an overview of everything. ${who} Use concrete examples and a worked scenario from that practice, and short code or diagrams only where they genuinely earn their place. Markdown, with ## sections. No preamble about what the article will cover.
 ${LANGS[lang] || 'Write it in the language of the subject.'}${avoid.length ? ` Do NOT write about these, they are already covered: ${avoid.map(t => `"${esc(t)}"`).join('; ')}.` : ''}
-Respond with ONLY JSON: {"title": string, "minutes": number (the honest reading time), "body": markdown string}`, undefined, { signal });
+Respond with ONLY JSON: {"title": string, "minutes": number (the honest reading time), "body": markdown string}`, undefined, { signal, onDelta: live('words') });
     if (!b?.body) throw new Error('no article came back');
     const body = String(b.body);
-    onStage('comments'); // the panel's second stage: the thread is written against the finished body
-    const c = await json(s, `Below is an article titled "${esc(b.title)}". Write the comment thread under it, as if on a forum read by senior engineers.
+    emit({ stage: 'comments', words: body.split(/\s+/).length }); // the panel's second stage: the thread is written against the finished body
+    const c = await json(s, `Below is an article titled "${esc(b.title)}". Write the comment thread under it, as if on a forum read by experienced practitioners in this field. ${who}
 At least 20 comments from named people with different backgrounds and opinions. They must be a real conversation: some ask sharp questions about the article, others answer them, people disagree with each other, correct a detail, add a war story from production, or take a point further. A reply must clearly answer the comment it replies to.
 Set "replyTo" to the 0-based index of the comment being replied to, or null for a top-level comment. Replies may nest. Write in the same language as the article.
 Respond with ONLY JSON: {"comments": [{"author": string, "role": short string like "payments team, 8y", "text": string, "replyTo": number or null}]}
 
 Article:
-${body.slice(0, 12000)}`, undefined, { signal }).catch(() => null); // the article is worth keeping even if the thread fails
+${body.slice(0, 12000)}`, undefined, { signal, onDelta: live('comments') }).catch(() => null); // the article is worth keeping even if the thread fails
     const comments = (c?.comments || []).slice(0, 60).map((x, i) => ({
       author: String(x.author || 'Anonymous').slice(0, 60), role: String(x.role || '').slice(0, 80), text: String(x.text || '').slice(0, 4000),
       replyTo: Number.isInteger(+x.replyTo) && +x.replyTo >= 0 && +x.replyTo < i ? +x.replyTo : null, // only backwards: no cycles
@@ -205,7 +216,7 @@ ${body.slice(0, 12000)}`, undefined, { signal }).catch(() => null); // the artic
     const send = m => { if (!ac.signal.aborted) res.write(JSON.stringify(m) + '\n'); };
     const avoid = loadBlog().filter(a => a.studyId === s.id).slice(0, 12).map(a => a.title);
     const lang = LANGS[req.body?.language] ? String(req.body.language) : ''; // allowlisted: only what we have a sentence for
-    try { send({ stage: 'body' }); const a = await writeArticle(s, avoid, ac.signal, st => send({ stage: st }), lang); send({ saved: card(a) }); }
+    try { send({ stage: 'body' }); const a = await writeArticle(s, avoid, ac.signal, send, lang); send({ saved: card(a) }); }
     catch (e) { if (!ac.signal.aborted) send({ error: e.message }); }
     res.end();
   });
@@ -217,7 +228,7 @@ ${body.slice(0, 12000)}`, undefined, { signal }).catch(() => null); // the artic
   const madeToday = () => { const today = localDay(Date.now()); return loadBlog().filter(a => localDay(a.at) === today).length; };
   let dailyRunning = false;
   async function dailyTick() {
-    if (dailyRunning || !readJson(file('settings.json'), {}).blogDaily) return;
+    if (dailyRunning || !readJson(path.join(DATA, 'settings.json'), {}).blogDaily) return; // settings are machine-level, not per profile
     const missing = DAILY - madeToday(); if (missing <= 0) return;
     const list = allStudies().filter(s => !s.general).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     if (!list.length) return;
@@ -336,11 +347,11 @@ Respond with ONLY JSON: {"topic": short topic label, "answer": markdown string}`
   });
 
   // ---------- job prep: match a CV to a job description, research the company's interviews, build a practice plan ----------
-  const PREP = file('prep.json'), loadPrep = () => readJson(PREP, []);
+  const PREP = () => file('prep.json'), loadPrep = () => readJson(PREP(), []); // a function now: file() moves with the profile
   const { verify } = require('./linkcheck');
   const PREP_ROUNDS = ['technical', 'behavioral', 'situational', 'management', 'system-design', 'architecture'];
   app.get('/api/prep', (req, res) => res.json(loadPrep().map(({ cv, ...p }) => p)));
-  app.delete('/api/prep/:pid', (req, res) => { fs.writeFileSync(PREP, JSON.stringify(loadPrep().filter(p => p.id !== req.params.pid))); res.json({ ok: true }); });
+  app.delete('/api/prep/:pid', (req, res) => { fs.writeFileSync(PREP(), JSON.stringify(loadPrep().filter(p => p.id !== req.params.pid))); res.json({ ok: true }); });
   // a CV picked as a PDF becomes text with pdftotext (poppler)
   app.post('/api/prep/cv-text', (req, res) => {
     const f = String(req.body?.path || '');
@@ -380,7 +391,7 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
         flashcards: (r.flashcards || []).filter(c => c?.q && c?.a).map(c => ({ q: String(c.q), a: String(c.a) })).slice(0, 12),
       };
       if (ac.signal.aborted) return;
-      const list = loadPrep(); list.unshift(p); fs.writeFileSync(PREP, JSON.stringify(list.slice(0, 30)));
+      const list = loadPrep(); list.unshift(p); fs.writeFileSync(PREP(), JSON.stringify(list.slice(0, 30)));
       const { cv, ...out } = p; res.json(out);
     } catch (e) { if (!ac.signal.aborted) res.status(500).json({ error: e instanceof SyntaxError ? 'The reply came back garbled. Try again.' : e.message }); }
   });
@@ -390,7 +401,7 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
     if (p.cardsAdded) return res.json({ added: 0, already: true });
     const now = Date.now(), rv = loadReview();
     const added = p.plan.flashcards.map((c, i) => ({ id: `prep-${p.id}-${i}`, key: `prep:${p.id}:${i}`, studyId: '_general', source: 'card', q: c.q, a: c.a, choices: null, answerIndex: null, step: -1, reps: 0, lapses: 0, createdAt: now, dueAt: now }));
-    rv.cards.push(...added); write('review.json', rv); p.cardsAdded = now; fs.writeFileSync(PREP, JSON.stringify(list)); res.json({ added: added.length });
+    rv.cards.push(...added); write('review.json', rv); p.cardsAdded = now; fs.writeFileSync(PREP(), JSON.stringify(list)); res.json({ added: added.length });
   });
 
   // ---------- read aloud: Microsoft Edge neural voices (online, human-like), espeak through speech-dispatcher when offline ----------
@@ -434,7 +445,7 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
     throw last;
   }
   // ElevenLabs when a key and a voice are chosen in Settings: the most human voices; Egyptian ones come from its voice library
-  const EL = 'https://api.elevenlabs.io/v1', SETTINGS_FILE = file('settings.json'), cfg = () => readJson(SETTINGS_FILE, {});
+  const EL = 'https://api.elevenlabs.io/v1', SETTINGS_FILE = path.join(DATA, 'settings.json'), cfg = () => readJson(SETTINGS_FILE, {}); // keys are machine-level, not per profile
   const el = async (url, key, opts = {}) => {
     const r = await fetch(EL + url, { ...opts, headers: { 'xi-api-key': key, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) }, signal: AbortSignal.timeout(40000) });
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail?.message || (typeof j.detail === 'string' ? j.detail : '') || `ElevenLabs answered ${r.status}`); }
