@@ -4,6 +4,7 @@ import { api } from '../api.js'
 // New-study dialog (subject or PDF) and the profile/onboarding dialog. Owned by App so any page can open them.
 export function NewDialog({ mode, prefill, onClose, onCreated }) {
   const [title, setTitle] = useState(prefill?.title || ''); const [subject, setSubject] = useState(prefill?.subject || ''); const [pdf, setPdf] = useState(''); const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
+  const [level, setLevel] = useState('mid') // pitches the chapter plan, the chat, interviews and challenges
   const pick = async () => {
     setErr(''); const r = await api.get(`/api/pick-pdf?t=${Date.now()}`) // ponytail: cache-buster so a GET never replays an old empty pick
     if (r.error) return setErr(r.error); if (!r.file) return r.canceled || setErr('No file came back from the file picker.')
@@ -11,7 +12,7 @@ export function NewDialog({ mode, prefill, onClose, onCreated }) {
   }
   const create = async () => {
     if (!title.trim()) return setErr('Give it a title.'); if (mode === 'pdf' && !pdf) return setErr('Choose a PDF.')
-    setBusy(true); const s = await api.post('/api/studies', { title, subject, pdfPath: mode === 'pdf' ? pdf : '' }); setBusy(false)
+    setBusy(true); const s = await api.post('/api/studies', { title, subject, level, pdfPath: mode === 'pdf' ? pdf : '' }); setBusy(false)
     if (s.error) return setErr(s.error); onCreated(s.id)
   }
   return (
@@ -27,6 +28,12 @@ export function NewDialog({ mode, prefill, onClose, onCreated }) {
           <label className="text-[11px] uppercase tracking-wider text-dim">Subject / scope</label>
           <input className="input mt-1 mb-3" value={subject} onChange={e => setSubject(e.target.value)} placeholder="What to study, e.g. process scheduling algorithms" onKeyDown={e => e.key === 'Enter' && create()} />
         </>}
+        <label className="text-[11px] uppercase tracking-wider text-dim">Your level here</label>
+        <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 mt-1 mb-1">
+          {[['beginner', 'Beginner', 'New to this'], ['mid', 'Intermediate', 'Past the basics'], ['expert', 'Expert', 'Depth and edge cases']].map(([k, l, sub]) => (
+            <button key={k} onClick={() => setLevel(k)} title={sub} className={`flex-1 text-[11px] px-1 py-1.5 rounded-md ${level === k ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{l}</button>))}
+        </div>
+        <p className="text-[11px] text-dim mb-3">Sets where the chapter plan starts and how deep questions go.</p>
         {err && <div className="text-xs text-error mb-2">{err}</div>}
         <div className="flex justify-end gap-2"><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={create}>{busy ? 'Creating…' : 'Create'}</button></div>
       </div>

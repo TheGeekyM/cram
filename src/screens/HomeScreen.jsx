@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
 import { ask } from '../components/Confirm.jsx'
+import NotificationBell from '../components/NotificationBell.jsx'
 
 // Student dashboard: coach banner, continue-learning
 // cards, weekly ring, to-do list. Stats come from /api/dashboard, advice from /api/coach.
@@ -253,6 +254,7 @@ export default function HomeScreen({ section, studies, settings, profile, onEdit
           <div className="flex-1" />
           <button onClick={() => onNew('subject')} className="btn btn-primary text-xs py-1.5 inline-flex items-center gap-1.5"><Ico s={13} d={I.new} />New study</button>
           {settings && <span className={`badge ${settings.hasKey ? 'badge-green' : 'badge-red'}`}>{settings.hasKey ? `${settings.source === 'cli' ? 'CLI' : settings.source === 'claude' ? 'Claude' : 'key'} · ${settings.model.replace('claude-', '')}` : 'not signed in'}</span>}
+          {sec === 'dashboard' && <NotificationBell />}{/* Studies gets its bell from the app's top bar */}
         </div>
         {sec === 'dashboard' && <Dashboard profile={profile} dash={dash} coach={coach} coaching={coaching} onCoach={runCoach} onOpenTool={onOpenTool} onNew={onNew} onProfile={onEditProfile} report={report} reporting={reporting} onReport={runReport} onChanged={loadDash} />}
         {sec === 'studies' && <Studies studies={studies} q={q} setQ={setQ} onOpen={onOpen} onNew={onNew} onDelete={askDelete} onExport={exportNotes} />}

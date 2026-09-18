@@ -151,6 +151,105 @@ The tools that exist are: interview (adaptive oral exam), code challenge, review
     res.json({ ok: true, note: { id: note.id, title: note.title } });
   });
 
+  // ---------- blog: long articles about what you study, each with a threaded discussion under it ----------
+  // Two calls per article: the body, then the comments written against that finished body, so the thread
+  // actually answers the article (and neither call runs near the CLI's timeout). Saved one at a time.
+  const BLOG = 'blog.json';
+  // picked per run in the Generate dialog; anything else falls back to the subject's own language
+  const LANGS = { english: 'Write it in English.', arabic: 'Write it in Egyptian Arabic, keeping technical terms in English.' };
+  const loadBlog = () => readJson(file(BLOG), []);
+  const strip = h => String(h || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const card = a => ({ id: a.id, title: a.title, studyId: a.studyId, studyTitle: a.studyTitle, at: a.at, minutes: a.minutes,
+    comments: a.comments?.length || 0, excerpt: strip(a.body).slice(0, 220),
+    search: `${a.title} ${strip(a.body)} ${(a.comments || []).map(c => `${c.author} ${c.text}`).join(' ')}`.toLowerCase().slice(0, 8000) });
+  app.get('/api/blog', (req, res) => res.json({ articles: loadBlog().map(card) }));
+  app.get('/api/blog/:aid', (req, res) => { const a = loadBlog().find(x => x.id === req.params.aid); a ? res.json(a) : res.status(404).json({ error: 'no such article' }); });
+  app.delete('/api/blog/:aid', (req, res) => { write(BLOG, loadBlog().filter(x => x.id !== req.params.aid)); res.json({ ok: true }); });
+
+  // one article: body, then its discussion. Returns the saved article; throws so the caller can report it.
+  async function writeArticle(s, avoid = [], signal, onStage = () => {}, lang = '') {
+    const level = { beginner: 'a beginner', mid: 'someone past the basics', expert: 'an experienced practitioner' }[s.level];
+    const b = await json(s, `Write a deep, practical article for someone studying "${esc(s.title)}"${s.subject ? ` (${esc(s.subject)})` : ''}.${level ? ` The reader is ${level}.` : ''}
+It must be a 10 minute read at minimum: 1800-2400 words. Teach one specific, worthwhile idea from this subject in depth — not an overview of everything. Use concrete examples, a worked scenario, and short code or diagrams where they earn their place. Markdown, with ## sections. No preamble about what the article will cover.
+${LANGS[lang] || 'Write it in the language of the subject.'}${avoid.length ? ` Do NOT write about these, they are already covered: ${avoid.map(t => `"${esc(t)}"`).join('; ')}.` : ''}
+Respond with ONLY JSON: {"title": string, "minutes": number (the honest reading time), "body": markdown string}`, undefined, { signal });
+    if (!b?.body) throw new Error('no article came back');
+    const body = String(b.body);
+    onStage('comments'); // the panel's second stage: the thread is written against the finished body
+    const c = await json(s, `Below is an article titled "${esc(b.title)}". Write the comment thread under it, as if on a forum read by senior engineers.
+At least 20 comments from named people with different backgrounds and opinions. They must be a real conversation: some ask sharp questions about the article, others answer them, people disagree with each other, correct a detail, add a war story from production, or take a point further. A reply must clearly answer the comment it replies to.
+Set "replyTo" to the 0-based index of the comment being replied to, or null for a top-level comment. Replies may nest. Write in the same language as the article.
+Respond with ONLY JSON: {"comments": [{"author": string, "role": short string like "payments team, 8y", "text": string, "replyTo": number or null}]}
+
+Article:
+${body.slice(0, 12000)}`, undefined, { signal }).catch(() => null); // the article is worth keeping even if the thread fails
+    const comments = (c?.comments || []).slice(0, 60).map((x, i) => ({
+      author: String(x.author || 'Anonymous').slice(0, 60), role: String(x.role || '').slice(0, 80), text: String(x.text || '').slice(0, 4000),
+      replyTo: Number.isInteger(+x.replyTo) && +x.replyTo >= 0 && +x.replyTo < i ? +x.replyTo : null, // only backwards: no cycles
+    })).filter(x => x.text);
+    const now = Date.now();
+    const a = { id: `art-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`, studyId: s.id, studyTitle: s.title, at: now,
+      title: String(b.title || s.title).slice(0, 200), minutes: Math.max(10, Math.round(+b.minutes) || 10), body: marked.parse(body), comments };
+    write(BLOG, [a, ...loadBlog()]);
+    return a;
+  }
+
+  // streamed like the Q&A note: {stage} per phase, {saved} per finished article, then {error} if one fails
+  // One article per request, and the page asks again for the next one. A server-side loop could not be
+  // stopped honestly: the client's abort needs a round trip, by which time the next (expensive) article
+  // has already started. Asking again also means `avoid` re-reads what is on disk, including the last one.
+  app.post('/api/blog/generate', async (req, res) => {
+    const s = findStudy({ params: { id: String(req.body?.studyId || '') } }, res); if (!s) return;
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    const ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+    const send = m => { if (!ac.signal.aborted) res.write(JSON.stringify(m) + '\n'); };
+    const avoid = loadBlog().filter(a => a.studyId === s.id).slice(0, 12).map(a => a.title);
+    const lang = LANGS[req.body?.language] ? String(req.body.language) : ''; // allowlisted: only what we have a sentence for
+    try { send({ stage: 'body' }); const a = await writeArticle(s, avoid, ac.signal, st => send({ stage: st }), lang); send({ saved: card(a) }); }
+    catch (e) { if (!ac.signal.aborted) send({ error: e.message }); }
+    res.end();
+  });
+
+  // ---------- two articles a day, while Cram is open (Settings → Daily articles) ----------
+  // The quota is counted off disk rather than kept as a counter, so a restart, a crash or an article
+  // you wrote by hand can never make it spend twice. Studies take turns, newest first.
+  const DAILY = 2;
+  const madeToday = () => { const today = localDay(Date.now()); return loadBlog().filter(a => localDay(a.at) === today).length; };
+  let dailyRunning = false;
+  async function dailyTick() {
+    if (dailyRunning || !readJson(file('settings.json'), {}).blogDaily) return;
+    const missing = DAILY - madeToday(); if (missing <= 0) return;
+    const list = allStudies().filter(s => !s.general).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    if (!list.length) return;
+    dailyRunning = true;
+    try {
+      for (let i = 0; i < missing; i++) {
+        const s = list[i % list.length];
+        const avoid = loadBlog().filter(a => a.studyId === s.id).slice(0, 12).map(a => a.title);
+        try { await writeArticle(s, avoid); } catch (e) { console.log(`         [blog] daily article failed: ${e.message}`); break; }
+      }
+    } finally { dailyRunning = false; }
+  }
+  module.exports.dailyTick = dailyTick; // the test drives it directly
+  if (!process.env.CRAM_NO_CRON) { setTimeout(dailyTick, 60000).unref(); setInterval(dailyTick, 36e5).unref(); } // a minute after launch, then hourly
+
+  // ---------- a subject study's chapter plan: empty chapters (titles only), so you can see what you are going to study.
+  // server.js owns /outline for PDF studies and passes everything else here. Planned once, on first view, then cached. ----------
+  app.get('/api/studies/:id/outline', async (req, res) => {
+    let s; try { s = study(path.basename(req.params.id)); } catch { return res.status(404).json({ error: 'no such study' }); }
+    if (s.outline && !req.query.refresh) return res.json(s.outline);
+    const level = { beginner: 'a complete beginner', mid: 'at an intermediate level, past the basics', expert: 'an advanced learner who wants depth and edge cases' }[s.level];
+    try {
+      const r = await json(s, `Plan what to study for "${esc(s.title)}"${s.subject ? `, specifically: ${esc(s.subject)}` : ''}. ${level ? `The learner is ${level}, so start where that level starts and pitch the depth for them.` : ''}
+Give 6 to 12 chapters in the order they should be studied, each with 2 to 5 sections inside it. Titles only, no descriptions: this is a plan of what is coming, not the material itself. Write the titles in the language of the subject.
+Respond with ONLY JSON: {"items": [{"title": string, "depth": 0 for a chapter, 1 for a section}]}`);
+      const items = (r.items || []).filter(x => x.title).slice(0, 80)
+        .map(x => ({ title: String(x.title).slice(0, 200), depth: Math.min(1, Math.max(0, Math.round(+x.depth) || 0)) }));
+      if (!items.length) throw new Error('No chapters came back. Try again.');
+      const s2 = study(s.id); s2.outline = { at: Date.now(), from: 'subject', items }; save(s2); res.json(s2.outline);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ---------- interview Q&A note: picked questions with their right answers, grouped by topic. One note per interview,
   // grown on each export; turns written into it carry inNote so the picker can default to the rest ----------
   app.post('/api/studies/:id/interviews/:iid/qa-note', async (req, res) => {

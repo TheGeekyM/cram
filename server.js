@@ -43,6 +43,7 @@ app.post('/api/settings', (req, res) => {
   if (typeof req.body.geminiKey === 'string' && !req.body.geminiKey.includes('…')) s.geminiKey = req.body.geminiKey.trim(); // empty clears it
   if (MODELS.includes(req.body.model)) s.model = req.body.model;
   if (['auto', 'api'].includes(req.body.provider)) s.provider = req.body.provider;
+  if (typeof req.body.blogDaily === 'boolean') s.blogDaily = req.body.blogDaily; // two articles a day, written while Cram is open
   fs.writeFileSync(SETTINGS, JSON.stringify(s)); res.json({ ok: true });
 });
 
@@ -62,11 +63,13 @@ async function client() {
 }
 const INTERVIEWER = `You are Cram, a seasoned hiring manager and interview coach who has run hundreds of real interviews at strong tech companies. Be realistic, fair and specific. Use Markdown.`;
 const SYSTEM = `You are Cram, a sharp, friendly study tutor. Teach from the provided material; where it is silent, use solid general knowledge and say so. Be concrete, use examples, keep answers tight. Use Markdown.`;
+// How deep to pitch everything (chat, interviews, challenges, chapter plans); set when the study is created
+const LEVEL = { beginner: 'a complete beginner', mid: 'at an intermediate level, past the basics', expert: 'an advanced learner who wants depth and edge cases' };
 // Stable prefix for prompt caching: PDF (if any) goes in the first user turn with cache_control
 function context(s) {
   const pdf = path.join(STUDIES, s.id, 'source.pdf');
   if (s.general) return { system: INTERVIEWER, prefix: [], pdf: null };
-  const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.`;
+  const intro = `Study: "${s.title}". Subject: ${s.subject || s.title}.${LEVEL[s.level] ? ` The learner is ${LEVEL[s.level]}: pitch the depth, the vocabulary and the examples for that level.` : ''}`;
   if (!fs.existsSync(pdf)) return { system: `${SYSTEM}\n${intro}`, prefix: [], pdf: null };
   return { system: `${SYSTEM}\n${intro} The study material is the attached PDF.`, pdf, prefix: [
     { role: 'user', content: [
@@ -124,10 +127,10 @@ app.get('/api/pick-pdf', async (req, res) => {
   try { const file = await app.pickPdf(); res.json(file ? { file } : { canceled: true }); } catch (e) { res.json({ error: `File picker failed: ${e.message}` }); }
 });
 app.post('/api/studies', (req, res) => {
-  const { title, subject, pdfPath } = req.body;
+  const { title, subject, pdfPath, level } = req.body;
   if (!title?.trim()) return res.status(400).json({ error: 'title required' });
   if (pdfPath && fs.statSync(pdfPath).size > 30e6) return res.status(400).json({ error: 'PDF over 30 MB' });
-  const s = { id: Date.now().toString(36), title: title.trim(), subject: (subject || '').trim(), hasPdf: !!pdfPath, createdAt: Date.now(), updatedAt: Date.now(), chat: [], interviews: [], quizzes: [], challenges: [] };
+  const s = { id: Date.now().toString(36), title: title.trim(), subject: (subject || '').trim(), level: LEVEL[level] ? level : '', hasPdf: !!pdfPath, createdAt: Date.now(), updatedAt: Date.now(), chat: [], interviews: [], quizzes: [], challenges: [] };
   fs.mkdirSync(path.join(STUDIES, s.id));
   if (pdfPath) fs.copyFileSync(pdfPath, path.join(STUDIES, s.id, 'source.pdf'));
   save(s); res.json(s);
@@ -243,9 +246,9 @@ const bookmarks = f => new Promise(r => {
   p.on('close', () => r(out.split('\n').map(l => /^[|+](\t+)"(.*)"\t#page=(\d+)/.exec(l)).filter(Boolean).map(m => ({ title: m[2].replace(/\\"/g, '"'), page: +m[3], depth: m[1].length - 1 }))));
 });
 // cached on the study; a PDF without bookmarks (or no mutool) gets its contents read once by Claude
-app.get('/api/studies/:id/outline', async (req, res) => {
+app.get('/api/studies/:id/outline', async (req, res, next) => {
   let s; try { s = study(path.basename(req.params.id)); } catch { return res.status(404).json({ error: 'no such study' }); }
-  const f = path.join(STUDIES, s.id, 'source.pdf'); if (!fs.existsSync(f)) return res.status(404).json({ error: 'This study has no PDF.' });
+  const f = path.join(STUDIES, s.id, 'source.pdf'); if (!fs.existsSync(f)) return next(); // no PDF: features.js plans the chapters from the subject
   if (s.outline && !req.query.refresh) return res.json(s.outline);
   try {
     let items = await bookmarks(f), from = 'bookmarks';

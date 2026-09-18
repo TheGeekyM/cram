@@ -810,7 +810,7 @@ export default function Interview({ studies, scope = GENERAL, bar = 'interview',
   if (sel === 'stories') return <>{css}<StoryBank bar={bar} onBack={() => setSel(null)} /></>
   if (active) return <>{css}<Session key={active.id} study={{ id: scope }} iv={active} setIv={setIv} onBack={() => setSel(null)} bar={bar} /></>
   if (!list.length || sel === 'new') return <>{css}<Centered wide={scope === GENERAL}>
-    {list.length > 0 && <PageBar tool={bar} onBack={() => setSel(null)} keepSidebar><span className="text-sm font-semibold text-white whitespace-nowrap">{scope === GENERAL ? 'New mock interview' : 'New interview'}</span></PageBar>}{/* the "Interview" crumb goes back to the list */}
+    {list.length > 0 && <PageBar tool={bar} onBack={() => setSel(null)}><span className="text-sm font-semibold text-white whitespace-nowrap">{scope === GENERAL ? 'New mock interview' : 'New interview'}</span></PageBar>}{/* the "Interview" crumb goes back to the list */}
     {scope === GENERAL ? <RealHero busy={busy} onStart={start} onCoding={() => onOpenTool?.(null, 'code')} onPrep={() => setSel('prep')} onStories={() => setSel('stories')} /> : <Hero busy={busy} onStart={start} />}
   </Centered></>
   const grid = <Grid onNew={() => setSel('new')} newLabel={scope === GENERAL ? 'New mock interview' : 'New interview'}>{list.map(iv => <Card key={iv.id} iv={iv} onOpen={() => setSel(iv.id)} onDelete={() => del(iv)} />)}</Grid>

@@ -86,12 +86,12 @@ export default function SettingsModal({ settings, onClose, onChange }) {
   const signIn = async () => { await api.post('/api/auth/start', {}); setPending(true) }
   const finish = async () => { const r = await api.post('/api/auth/code', { code }); if (r.error) return setErr(r.error); setCode(''); setPending(false); setErr(''); onChange() }
   const signOut = async () => { await api.post('/api/auth/logout', {}); onChange() }
-  const [saved, setSaved] = useState(false)
-  const save = async () => { await api.post('/api/settings', { apiKey: key, geminiKey: gkey, model, provider }); onChange(); setSaved(true); setTimeout(() => setSaved(false), 1800) }
-  return ( // a page of its own (the Settings entry in the sidebar), not a modal
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-6">
-        <div className="mb-5"><h1 className="text-xl font-semibold text-white">Settings</h1><p className="text-sm text-dim mt-0.5">How Cram reaches Claude, the interviewer's voice, reminders and your keys.</p></div>
+  const save = async () => { await api.post('/api/settings', { apiKey: key, geminiKey: gkey, model, provider }); onChange(); onClose() }
+  useEffect(() => { const k = e => e.key === 'Escape' && onClose(); window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="island w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start mb-5"><div className="flex-1"><h1 className="text-xl font-semibold text-white">Settings</h1><p className="text-sm text-dim mt-0.5">How Cram reaches Claude, the interviewer's voice, reminders and your keys.</p></div><button onClick={onClose} title="Close (Esc)" aria-label="Close settings" className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5">✕</button></div>
         <div className="panel p-3 mb-3">
           <div className="flex items-center"><span className="text-xs font-semibold text-white flex-1">Claude Code CLI</span><span className={`badge ${settings?.cli ? 'badge-green' : ''}`}>{settings?.cli ? 'installed · uses your login' : 'not found'}</span></div>
           <p className="text-[11px] text-dim mt-1">Preferred when present: runs on your Claude subscription through the <span className="font-mono">claude</span> CLI, which is not throttled like raw API calls.</p>
@@ -107,6 +107,20 @@ export default function SettingsModal({ settings, onClose, onChange }) {
           </>}
           {err && <div className="text-xs text-error mt-2">{err}</div>}
         </div>
+        <div className="panel p-3 mb-3">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-semibold text-white">Daily articles</div>
+              {/* saved on click, not on Save: one switch should not depend on remembering the button below */}
+              <p className="text-[11px] text-dim mt-1">Two articles a day about what you study, each a 10-minute read with a discussion under it. Written while Cram is open; they appear in Blog and ring the bell.</p>
+            </div>
+            <button type="button" role="switch" aria-checked={!!settings?.blogDaily} aria-label="Write two articles a day"
+              onClick={async () => { await api.post('/api/settings', { blogDaily: !settings?.blogDaily }); onChange() }}
+              className={`w-8 h-[18px] rounded-full relative transition-colors flex-shrink-0 ${settings?.blogDaily ? 'bg-accent' : 'bg-panel-2'}`}>
+              <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all ${settings?.blogDaily ? 'left-[16px]' : 'left-[2px]'}`} />
+            </button>
+          </div>
+        </div>
         <ElevenPanel settings={settings} onChange={onChange} />
         <RemindersPanel />
         <Extras />
@@ -117,7 +131,7 @@ export default function SettingsModal({ settings, onClose, onChange }) {
         <p className="text-[11px] text-dim mt-1 mb-3">Get one at <a className="text-accent hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Without it, questions use the Edge voice.</p>
         <label className="text-[11px] uppercase tracking-wider text-dim">Model</label>
         <select className="input mt-1 mb-4" value={model} onChange={e => setModel(e.target.value)}>{(settings?.models || ['claude-opus-5']).map(m => <option key={m}>{m}</option>)}</select>
-        <div className="flex items-center"><span className="text-[11px] text-dim">Cram by Mohamed Emad · thegeekym@gmail.com</span><div className="flex-1" />{saved && <span className="text-xs text-success mr-3">Saved</span>}<button className="btn btn-primary" onClick={save}>Save</button></div>
+        <div className="flex items-center"><span className="text-[11px] text-dim">Cram by Mohamed Emad · thegeekym@gmail.com</span><div className="flex-1" /><button className="btn btn-primary" onClick={save}>Save</button></div>
       </div>
     </div>
   )

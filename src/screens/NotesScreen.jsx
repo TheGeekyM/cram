@@ -13,7 +13,6 @@ import 'highlight.js/styles/github-dark.css'
 import { detectLang, LANGS } from '../notesLang.js'
 import { buildExportHtml, exportFileName } from './notesExport.js'
 import { htmlToMd } from './markdownLite.js'
-import NavBar from '../components/NavBar.jsx'
 import ResizableSidebar from '../components/ResizableSidebar.jsx'
 import { useCollapsedGroups, ItemMenu, colorOf } from '../components/SidebarGroups.jsx'
 import { childrenOf, isDescendant } from '../core/notesTree.mjs'
@@ -660,7 +659,7 @@ const inStudy = (notes, sid) => {
 }
 
 // studyId + embedded: the Notes tool inside a study's workspace (filtered list, new notes tagged, no page chrome)
-export default function NotesScreen({ project, onHome, studyId, embedded }) {
+export default function NotesScreen({ project, studyId, embedded }) {
   const [notes, setNotes]     = useState([])
   const [query, setQuery]     = useState('')      // filters titles and note text
   const [rowMenu, setRowMenu] = useState(null)    // { at:{x,y}, note } — right-click on a row
@@ -1023,8 +1022,6 @@ export default function NotesScreen({ project, onHome, studyId, embedded }) {
 
   return (
     <div className="h-full bg-app flex flex-col overflow-hidden">{/* h-full, not h-screen: it lives in App's pane and would cover the tab row below */}
-      {!embedded && <NavBar title="Notes" onHome={onHome} />}
-
       <div className="flex-1 flex overflow-hidden bg-app p-2.5 gap-2.5">
         {/* Note list — drag its right edge to resize, double-click it to collapse */}
         <ResizableSidebar storageKey="notesList" defaultWidth={256} min={190} max={460} collapsedWidth={44}>
