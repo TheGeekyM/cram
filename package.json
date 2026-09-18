@@ -2,6 +2,7 @@
   "name": "cram",
   "version": "0.3.0",
   "description": "Cram: a NotebookLM-style study desk. Attach a PDF or name a subject, then ask, quiz, get interviewed and solve coding challenges, powered by Claude.",
+  "homepage": "https://github.com/TheGeekyM/cram",
   "main": "main.js",
   "scripts": {
     "build": "vite build",
