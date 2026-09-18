@@ -90,7 +90,8 @@ const LEVEL = { beginner: 'a complete beginner', mid: 'at an intermediate level,
 // Stable prefix for prompt caching: PDF (if any) goes in the first user turn with cache_control
 function context(s) {
   const pdf = path.join(STUDIES, s.id, 'source.pdf');
-  if (s.general) return { system: INTERVIEWER, prefix: [], pdf: null };
+  // the interviewer needs it too: it is the one that speaks to the learner all session
+  if (s.general) return { system: `${INTERVIEWER} ${roles.addressRule(readJson(PROFILE, {}))}`.trim(), prefix: [], pdf: null };
   // the learner's level and their role both shape every answer: a nutritionist asking about "absorption"
   // wants clinical examples, not database ones
   const me = readJson(PROFILE, {});

@@ -19,7 +19,7 @@ const ago = t => { if (!t) return 'never'; const d = Math.floor((Date.now() - t)
 const STAGES = [['student', 'Studying'], ['job-hunting', 'Job hunting'], ['working', 'Working'], ['exam', 'Exam ahead']]
 const LANGS = [['English', 'English'], ['Arabic', 'العربية']]
 // only what changes how the app speaks to you — Arabic marks it in every sentence
-const GENDERS = [['male', 'Male · بيك'], ['female', 'Female · بيكي'], ['', 'Rather not say']]
+const GENDERS = [['male', 'Male'], ['female', 'Female'], ['', 'Rather not say']]
 
 // The questions worth asking. Everything here feeds what Cram suggests and how it talks to you:
 // the target role decides which tools appear and what an interview even looks like.

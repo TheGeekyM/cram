@@ -76,9 +76,9 @@ function roleContext(p) {
 // and so do many other languages. Getting it wrong is jarring in every sentence, so it is told to every
 // surface that speaks to the learner. Unset says nothing at all rather than guessing.
 const addressRule = p => p?.gender === 'female'
-  ? 'The learner is a woman: address her in the feminine form everywhere the language marks gender (Arabic: أهلاً بيكي، إنتي، عايزة، جاهزة، قلتي).'
+  ? 'The learner is a woman. Speak to her in the feminine form, and refer to her as "she" and "her" when writing about her. In Arabic use feminine forms throughout — verbs, pronouns and adjectives alike (إنتي، عايزة، جاهزة، قلتي، فهمتي، ممكن تشرحيلي) — and never the masculine.'
   : p?.gender === 'male'
-    ? 'The learner is a man: address him in the masculine form everywhere the language marks gender (Arabic: أهلاً بيك، إنت، عايز، جاهز، قلت).'
+    ? 'The learner is a man. Speak to him in the masculine form, and refer to him as "he" and "him" when writing about him. In Arabic use masculine forms throughout — verbs, pronouns and adjectives alike (إنت، عايز، جاهز، قلت، فهمت، ممكن تشرحلي).'
     : '';
 
 // What the coach and the weekly report are allowed to suggest. Built from the role, so a nutritionist's
