@@ -9,7 +9,7 @@ function CopyBtn({ text }) {
   const [done, setDone] = useState(false)
   const copy = e => { e.stopPropagation(); navigator.clipboard.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200) }
   return (
-    <button onClick={copy} title="Copy" className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-[11px] px-2 py-0.5 rounded-md bg-panel-2 border border-border text-dim hover:text-white flex items-center gap-1">
+    <button onClick={copy} title="Copy" className="absolute top-1.5 end-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-[11px] px-2 py-0.5 rounded-md bg-panel-2 border border-border text-dim hover:text-white flex items-center gap-1">
       {done ? <><Ico d={<path d="M20 6 9 17l-5-5"/>} />Copied</> : <><Ico d={<><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></>} />Copy</>}
     </button>
   )
@@ -55,10 +55,12 @@ function Chat({ msgs, onSend, onStop, busy, placeholder, empty, right, onCite, h
         ) : (
           <div className="max-w-3xl mx-auto flex flex-col gap-5 py-3 px-1">
             {msgs.map((m, i) => m.role === 'user'
-              ? <div key={i} dir="auto" className="chat-in chat-user self-end max-w-[80%]">{m.content}</div>
+              ? <div key={i} dir={isRtl(m.content) ? 'rtl' : 'ltr'} className="chat-in chat-user self-end max-w-[80%]">{m.content}</div>
               : <div key={i} className="chat-in flex gap-3 items-start">
                   <div className={`chat-avatar ${busy && i === msgs.length - 1 ? 'chat-avatar-live' : ''}`}><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">{SPARK}</svg></div>
-                  <div dir="auto" className="group relative flex-1 min-w-0 chat-ai kb-rich text-sm pr-12">{m.content ? <><Markdown text={m.content} onCite={onCite} /><CopyBtn text={m.content} /></> : <Dots />}</div>
+                  {/* dir="auto" reads only the FIRST strong character, so an Arabic answer opening with a
+                      Latin term ("Caching يعني…") came out left-to-right. isRtl weighs the whole answer. */}
+                  <div dir={isRtl(m.content) ? 'rtl' : 'ltr'} className="group relative flex-1 min-w-0 chat-ai kb-rich text-sm pe-12">{m.content ? <><Markdown text={m.content} onCite={onCite} /><CopyBtn text={m.content} /></> : <Dots />}</div>
                 </div>)}
             {!busy && helpers?.length > 0 && <Chips key={msgs.length} items={helpers} onPick={pick} className="pt-1" />}
             <div ref={end} />

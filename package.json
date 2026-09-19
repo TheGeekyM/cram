@@ -59,6 +59,7 @@
       "cli.js",
       "features.js",
       "profiles.js",
+      "providers.js",
       "roles.js",
       "rounds.js",
       "jsonish.js",

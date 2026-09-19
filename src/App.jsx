@@ -52,7 +52,7 @@ const Crumb = {
   here: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm font-semibold text-white min-w-0',
   link: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm text-dim hover:text-white hover:bg-white/5 transition-colors',
 }
-// the account cluster in the top bar on every page but the dashboard (whose sidebar has its own), in aidle's order: bell, gear, account
+// the account cluster, at the right end of the window's top bar on every page, in aidle's order: bell, gear, account
 const Account = ({ profile, onProfile, onSettings, onProfiles }) => <>
   <button onClick={onProfiles} title="Switch profile" aria-label="Switch profile" className="w-7 h-7 rounded-md grid place-items-center flex-shrink-0 text-dim hover:text-white hover:bg-white/5 transition-colors"><Ico d={<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 11 3 3-3 3"/></>} /></button>
   <NotificationBell />
@@ -60,7 +60,8 @@ const Account = ({ profile, onProfile, onSettings, onProfiles }) => <>
   <span className="w-px h-4 bg-border mx-1" />
   <button onClick={onProfile} title="Profile" className="flex items-center gap-2 px-2 py-1 rounded-md text-sm text-dim hover:text-white hover:bg-white/5 min-w-0"><span className="w-5 h-5 rounded-full bg-accent text-app grid place-items-center text-[10px] font-bold flex-shrink-0">{profile?.name?.[0]?.toUpperCase() || '?'}</span><span className="truncate max-w-[140px]">{profile?.name || 'Set up profile'}</span></button>
 </>
-function Sidebar({ page, go, profile, onProfile, onSettings, onProfiles, due, onPalette }) {
+// navigation only: the wordmark and the account cluster live in the window's top bar above it
+function Sidebar({ page, go, profile, due, onPalette }) {
   const Btn = ([id, label, ic], n) => (
     <button key={id} onClick={() => go(id)} title={`${label} (Ctrl+${n + 1})`} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${page === id ? 'bg-accent text-app font-semibold' : 'text-dim hover:text-white hover:bg-white/5'}`}>
       <Ico d={ic} />{label}
@@ -69,18 +70,11 @@ function Sidebar({ page, go, profile, onProfile, onSettings, onProfiles, due, on
   )
   return (
     <aside className="island w-72 flex-shrink-0 flex flex-col p-3 gap-1 overflow-y-auto">
-      <div className="flex items-center gap-2 px-2 py-2"><div className="w-7 h-7 rounded-lg grid place-items-center text-sm font-bold text-app" style={{ background: 'rgb(var(--c-accent))' }}>C</div><span className="text-sm font-semibold text-white tracking-wide">CRAM</span></div>
       <button onClick={onPalette} className="flex items-center gap-2 px-3 py-1.5 mb-2 rounded-lg text-xs text-dim border border-border bg-app hover:text-white"><Ico s={13} d={I.search} />Jump to…<span className="ml-auto text-[10px] font-mono">Ctrl K</span></button>
       {PAGES.map((e, n) => Btn(e, n))}
       <div className="text-[10px] uppercase tracking-[0.18em] text-dim px-3 pt-4 pb-1">Tools</div>
       {/* the role decides which tools exist: no Code for someone who does not write any */}
       {TOOLS.filter(([id]) => profile?.tools?.includes(id) ?? true).map((e, n) => Btn(e, n + PAGES.length))}
-      <div className="flex-1" />
-      <div className="flex items-center gap-1">
-        <button onClick={onProfile} className="flex-1 min-w-0 flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-dim hover:text-white hover:bg-white/5"><span className="w-[15px] h-[15px] rounded-full bg-accent text-app grid place-items-center text-[9px] font-bold flex-shrink-0">{profile?.name?.[0]?.toUpperCase() || '?'}</span><span className="truncate">{profile?.name || 'Set up profile'}</span></button>
-        <button onClick={onProfiles} title="Switch profile" aria-label="Switch profile" className="w-7 h-7 rounded-md grid place-items-center flex-shrink-0 text-dim hover:text-white hover:bg-white/5"><Ico s={14} d={<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 11 3 3-3 3"/></>} /></button>
-      </div>
-      <button onClick={onSettings} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-dim hover:text-white hover:bg-white/5"><Ico d={I.gear} />Settings</button>
     </aside>
   )
 }
@@ -187,8 +181,19 @@ export default function App() {
   const needsProfile = !!profiles && !profiles.list?.some(p => p.name && p.name !== 'Unnamed')
   if (showProfiles || needsProfile) return <Profiles active={profiles?.active} list={profiles?.list || []} onClose={needsProfile ? null : () => setShowProfiles(false)} />
   return (
-    <div className="h-screen flex bg-app p-2.5 gap-2.5">
-      {home && <Sidebar page={page} go={go} profile={profile} onProfile={() => setEditProfile(true)} onProfiles={() => setShowProfiles(true)} due={due} onSettings={() => setSettingsOpen(true)} onPalette={() => setPalette(true)} />}
+    <div className="h-screen flex flex-col bg-app p-2.5 gap-2.5">
+      {/* one bar across the very top of the window — the app on the left, the account on the right.
+          It sits above the sidebar and the page, so the bell and the gear are never buried in a page header. */}
+      <header className="island flex items-center gap-1 px-2.5 h-12 flex-shrink-0">
+        <div className="w-7 h-7 rounded-lg grid place-items-center text-sm font-bold text-app flex-shrink-0" style={{ background: 'rgb(var(--c-accent))' }}>C</div>
+        <span className="text-sm font-semibold text-white tracking-wide ms-1">CRAM</span>
+        <div className="flex-1" />
+        <Account profile={profile} onProfile={() => setEditProfile(true)} onSettings={() => setSettingsOpen(true)} onProfiles={() => setShowProfiles(true)} />
+      </header>
+      <div className="flex-1 min-h-0 flex gap-2.5">
+      {home && <Sidebar page={page} go={go} profile={profile} due={due} onPalette={() => setPalette(true)} />}
+      {/* the study's tools card lands here, to the left of the page — `contents` makes its child a direct flex item */}
+      <div id="ws-side" className={page === 'study' && study ? 'contents' : 'hidden'} />
       <div className="flex-1 min-w-0 flex flex-col island overflow-hidden">
         <div className="order-last flex items-center gap-1 px-2 pt-1.5 pb-2 border-t border-border bg-app/40 overflow-x-auto flex-shrink-0" role="tablist">{/* order-last: the tabs sit at the bottom of the island */}
           {tabs.map((t, i) => {
@@ -228,8 +233,6 @@ export default function App() {
             </>}
             {SLOTS.map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
             {!SLOTS.includes(page) && <div className="flex-1" />}
-            <span className="w-px h-4 bg-border mx-1 flex-shrink-0" />
-            <div className="flex items-center gap-0.5 flex-shrink-0"><Account profile={profile} onProfile={() => setEditProfile(true)} onSettings={() => setSettingsOpen(true)} onProfiles={() => setShowProfiles(true)} /></div>
           </div>
         )}
         <div className="flex-1 min-h-0 relative">
@@ -243,7 +246,7 @@ export default function App() {
           {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} profile={profile} /></div>}
         </div>
       </div>
-      <div id="ws-side" className={page === 'study' && study ? 'contents' : 'hidden'} />{/* the study tools card lands here: its own island beside the page, like the main sidebar */}
+      </div>
       {settingsOpen && <SettingsModal settings={settings} onChange={loadSettings} onClose={closeSettings} />}
       <ConfirmHost />
       <ReminderHost />

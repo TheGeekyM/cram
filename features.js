@@ -249,17 +249,35 @@ ${body.slice(0, 12000)}`, undefined, { signal, onDelta: live('comments') }).catc
   // server.js owns /outline for PDF studies and passes everything else here. Planned once, on first view, then cached. ----------
   app.get('/api/studies/:id/outline', async (req, res) => {
     let s; try { s = study(path.basename(req.params.id)); } catch { return res.status(404).json({ error: 'no such study' }); }
-    if (s.outline && !req.query.refresh) return res.json(s.outline);
+    if (s.outline && !req.query.refresh) return res.json(s.outline); // cached: plain JSON, whatever was asked for
     const level = { beginner: 'a complete beginner', mid: 'at an intermediate level, past the basics', expert: 'an advanced learner who wants depth and edge cases' }[s.level];
+    // Planning takes 15-130s. With ?stream=1 the panel watches it happen — chapters counted and the tail
+    // shown as they are written — instead of one motionless sentence. Without it the route is plain JSON.
+    const streaming = req.query.stream === '1';
+    let emit = () => {}, ac = null;
+    if (streaming) {
+      res.setHeader('Content-Type', 'application/x-ndjson');
+      ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+      emit = m => { if (!ac.signal.aborted) res.write(JSON.stringify(m) + '\n'); };
+    }
+    // counted off the raw JSON as it arrives: "depth": 0 is a chapter, every "title" is a line of the plan
+    const live = (() => { let text = '', last = 0; return d => {
+      text += d; const now = Date.now(); if (now - last < 400) return; last = now;
+      emit({ progress: { chapters: (text.match(/"depth"\s*:\s*0/g) || []).length, titles: (text.match(/"title"\s*:/g) || []).length, tail: text.slice(-140).replace(/\s+/g, ' ') } });
+    }; })();
     try {
+      emit({ stage: 'planning' });
       const r = await json(s, `Plan what to study for "${esc(s.title)}"${s.subject ? `, specifically: ${esc(s.subject)}` : ''}. ${level ? `The learner is ${level}, so start where that level starts and pitch the depth for them.` : ''}
 Give 6 to 12 chapters in the order they should be studied, each with 2 to 5 sections inside it. Titles only, no descriptions: this is a plan of what is coming, not the material itself. Write the titles in the language of the subject.
-Respond with ONLY JSON: {"items": [{"title": string, "depth": 0 for a chapter, 1 for a section}]}`);
+Respond with ONLY JSON: {"items": [{"title": string, "depth": 0 for a chapter, 1 for a section}]}`, undefined, streaming ? { signal: ac.signal, onDelta: live } : undefined);
       const items = (r.items || []).filter(x => x.title).slice(0, 80)
         .map(x => ({ title: String(x.title).slice(0, 200), depth: Math.min(1, Math.max(0, Math.round(+x.depth) || 0)) }));
       if (!items.length) throw new Error('No chapters came back. Try again.');
-      const s2 = study(s.id); s2.outline = { at: Date.now(), from: 'subject', items }; save(s2); res.json(s2.outline);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+      const s2 = study(s.id); s2.outline = { at: Date.now(), from: 'subject', items }; save(s2);
+      if (streaming) { emit({ result: s2.outline }); res.end(); } else res.json(s2.outline);
+    } catch (e) {
+      if (streaming) { emit({ error: e.message }); res.end(); } else res.status(500).json({ error: e.message });
+    }
   });
 
   // ---------- interview Q&A note: picked questions with their right answers, grouped by topic. One note per interview,

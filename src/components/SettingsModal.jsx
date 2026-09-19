@@ -3,23 +3,108 @@ import { api } from '../api.js'
 import { getTheme, setTheme } from '../theme.js'
 import { RemindersPanel } from './Reminders.jsx'
 
-// Appearance and the offline daily reminder (a cron entry that runs remind.js hourly).
-function Extras() {
-  const [theme, setT] = useState(getTheme()); const [rem, setRem] = useState(null); const [err, setErr] = useState('')
-  useEffect(() => { api.get('/api/reminder').then(r => r.error ? setErr(r.error) : setRem(r)) }, [])
-  const setR = async patch => { const prev = rem, next = { ...rem, ...patch }; setRem(next); if (!next.enabled && !('enabled' in patch)) return; const r = await api.post('/api/reminder', next); if (r.error) { setErr(r.error); setRem(prev) } else setErr('') }
-  const Pill = ({ on, children, onClick, disabled }) => <button disabled={disabled} onClick={onClick} className={`text-xs px-3 py-1 rounded-md capitalize ${on ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{children}</button>
+// Settings used to be one long scroll where the Save button sat below everything. It is now a
+// rail of sections — the list on the left, one section at a time on the right, Save always in view.
+
+const Pill = ({ on, children, onClick, disabled }) => <button disabled={disabled} onClick={onClick} className={`text-xs px-3 py-1 rounded-md capitalize ${on ? 'bg-panel-2 text-white' : 'text-dim hover:text-white'}`}>{children}</button>
+
+function SectionTitle({ title, sub }) {
   return (
-    <div className="panel p-3 mb-3 flex flex-col gap-2.5">
-      <div className="flex items-center gap-2"><span className="text-xs font-semibold text-white flex-1">Appearance</span>
-        <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5">{['dark', 'light'].map(t => <Pill key={t} on={theme === t} onClick={() => { setTheme(t); setT(t) }}>{t}</Pill>)}</div></div>
-      <div className="flex items-center gap-2"><span className="text-xs font-semibold text-white flex-1">Daily reminder when Cram is closed</span>
-        {rem?.supported !== false && <>
-          <select className="input w-auto py-1 text-xs" disabled={!rem} value={rem?.hour ?? 19} onChange={e => setR({ hour: +e.target.value })}>{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>after {String(h).padStart(2, '0')}:00</option>)}</select>
-          <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5"><Pill disabled={!rem} on={rem && !rem.enabled} onClick={() => setR({ enabled: false })}>off</Pill><Pill disabled={!rem} on={rem?.enabled} onClick={() => setR({ enabled: true })}>on</Pill></div>
-        </>}</div>
-      <p className="text-[11px] text-dim -mt-1">{rem?.supported === false ? 'Needs Linux: it runs from cron.' : 'A desktop notification at most once a day, and only when you have not studied for 20 hours. Works even when the app is closed.'}</p>
-      {err && <div className="text-xs text-error">{err}</div>}
+    <div className="mb-4">
+      <h3 className="text-sm font-semibold text-white">{title}</h3>
+      {sub && <p className="text-xs text-dim mt-0.5 leading-relaxed">{sub}</p>}
+    </div>
+  )
+}
+
+// How Cram reaches Claude: the CLI it prefers, the account it signs into, and the paid fallback.
+// The sign-in flow's state lives in the modal, not here: leaving this tab unmounts the section, and
+// losing `pending` mid-OAuth would take away the code box while the browser tab is still waiting.
+// A key for a provider whose CLI carries no login of its own. Saved on click, like the article
+// switch: a key you typed but never saved is a provider that quietly does not work.
+function ProviderKey({ p, onChange }) {
+  const [v, setV] = useState('')
+  const [saved, setSaved] = useState(!!p.hasKey)
+  useEffect(() => { setV(''); setSaved(!!p.hasKey) }, [p.id, p.hasKey])
+  const save = async () => { await api.post('/api/settings', { providerKey: { id: p.id, key: v } }); setSaved(!!v.trim()); setV(''); onChange() }
+  return (
+    <div className="panel p-3 mb-3">
+      <div className="flex items-end gap-2">
+        <div className="flex-1 min-w-0">
+          <label className="text-[11px] uppercase tracking-wider text-dim">{p.key.label}</label>
+          <input className="input mt-1 font-mono text-xs" type="password" value={v} onChange={e => setV(e.target.value)}
+            placeholder={saved ? '•••••••• saved' : (p.key.optional ? 'optional — leave empty to use the CLI login' : 'required')} />
+        </div>
+        <button className="btn btn-ghost text-xs" onClick={save}>{v.trim() ? 'Save' : 'Clear'}</button>
+      </div>
+      {p.key.url && <a href={p.key.url} target="_blank" rel="noreferrer" className="text-[10px] text-accent hover:underline mt-1.5 inline-block">Get a key →</a>}
+    </div>
+  )
+}
+
+function AiSection({ settings, onChange, provider, setProvider, apiKey, setApiKey, model, setModel, auth }) {
+  const { code, setCode, pending, setPending, err, setErr } = auth
+  const list = settings?.providers || []
+  // "provider:model" — the model half may itself hold colons, so never split naively
+  const i = String(model || '').indexOf(':')
+  const cur = list.find(p => p.id === (i > 0 ? String(model).slice(0, i) : '')) || list.find(p => p.id === 'claude') || null
+  const isClaude = !cur || cur.id === 'claude'
+  // switching provider carries the choice to that provider's first model, so Cram is never left
+  // pointing at a model the new CLI has never heard of
+  const pick = p => { if (p.id !== cur?.id && p.models?.[0]) setModel(`${p.id}:${p.models[0].id}`) }
+  const signedIn = settings?.source === 'claude'
+  const signIn = async () => { await api.post('/api/auth/start', {}); setPending(true) }
+  const finish = async () => { const r = await api.post('/api/auth/code', { code }); if (r.error) return setErr(r.error); setCode(''); setPending(false); setErr(''); onChange() }
+  const signOut = async () => { await api.post('/api/auth/logout', {}); onChange() }
+  return (
+    <div>
+      <SectionTitle title="AI" sub="Which AI does the work. Each one runs through its own CLI on this computer, so it needs that CLI installed and signed in." />
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        {list.map(p => (
+          <button key={p.id} onClick={() => pick(p)}
+            className={`text-start px-3 py-2.5 rounded-lg border transition-colors ${p.id === cur?.id ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40'}`}>
+            <span className={`block text-sm ${p.id === cur?.id ? 'text-white font-medium' : 'text-gray-300'}`}>{p.label}</span>
+            <span className={`block text-[10px] mt-0.5 ${p.installed ? 'text-dim' : 'text-warning'}`}>
+              {p.installed ? `${p.cliName} ✓ installed` : `${p.cliName} not found`}{p.hasKey ? ' · key saved' : ''}
+            </span>
+          </button>
+        ))}
+      </div>
+      {cur && !cur.installed && <p className={`text-[11px] mb-3 leading-relaxed ${cur.direct ? 'text-dim' : 'text-warning'}`}>{cur.note}</p>}
+      {isClaude && <>
+      <div className="panel p-3 mb-3">
+        <div className="flex items-center"><span className="text-xs font-semibold text-white flex-1">Claude Code CLI</span><span className={`badge ${settings?.cli ? 'badge-green' : ''}`}>{settings?.cli ? 'installed · uses your login' : 'not found'}</span></div>
+        <p className="text-[11px] text-dim mt-1">Preferred when present: runs on your Claude subscription through the <span className="font-mono">claude</span> CLI, which is not throttled like raw API calls.</p>
+        {/* not "Provider" any more — the grid above picks that; this is how to reach Claude */}
+        <label className="text-[11px] uppercase tracking-wider text-dim mt-2 block">Connection</label>
+        <select className="input mt-1" value={provider} onChange={e => setProvider(e.target.value)}><option value="auto">Auto (CLI if installed, else account / key)</option><option value="api">API only (account or key)</option></select>
+      </div>
+      <div className="panel p-3 mb-3">
+        <div className="flex items-center mb-2"><span className="text-xs font-semibold text-white flex-1">Claude account</span><span className={`badge ${signedIn ? 'badge-green' : ''}`}>{signedIn ? 'signed in' : 'signed out'}</span></div>
+        {signedIn ? <button className="btn btn-ghost" onClick={signOut}>Sign out</button> : <>
+          <button className="btn btn-primary" onClick={signIn}>Sign in with Claude</button>
+          {pending && <div className="flex gap-2 mt-2"><input className="input flex-1" placeholder="Paste the code from the browser page" value={code} onChange={e => setCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && finish()} /><button className="btn btn-primary" onClick={finish}>Finish</button></div>}
+          <p className="text-[11px] text-dim mt-2">Uses your Claude subscription, like Claude Code. A browser tab opens; copy the code it shows and paste it here.</p>
+        </>}
+        {err && <div className="text-xs text-error mt-2">{err}</div>}
+      </div>
+      <label className="text-[11px] uppercase tracking-wider text-dim">API key (pay-as-you-go fallback)</label>
+      <input className="input mt-1 mb-3 font-mono text-xs" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-ant-…" />
+      </>}
+      {cur?.key && <ProviderKey p={cur} onChange={onChange} />}
+      <label className="text-[11px] uppercase tracking-wider text-dim">Model</label>
+      <div className="flex flex-col gap-1.5 mt-1">
+        {(cur?.models || []).map(m => {
+          const id = `${cur.id}:${m.id}`, on = model === id
+          return (
+            <label key={id} className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${on ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40'}`}>
+              <input type="radio" name="cram-model" checked={on} onChange={() => setModel(id)} className="accent-accent" />
+              <span className={`text-sm ${on ? 'text-white font-medium' : 'text-gray-300'}`}>{m.label}</span>
+              <span className="ms-auto text-[10px] text-dim font-mono truncate">{m.id}</span>
+            </label>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -78,60 +163,143 @@ function ElevenPanel({ settings, onChange }) {
   )
 }
 
+function VoiceSection({ settings, onChange, gkey, setGkey }) {
+  return (
+    <div>
+      <SectionTitle title="Voice" sub="What the interviewer sounds like, and the key behind the human-like voice." />
+      <ElevenPanel settings={settings} onChange={onChange} />
+      <label className="text-[11px] uppercase tracking-wider text-dim">Gemini API key (human-like interviewer voice)</label>
+      <input className="input mt-1 font-mono text-xs" value={gkey} onChange={e => setGkey(e.target.value)} placeholder="AIza…" />
+      <p className="text-[11px] text-dim mt-1">Get one at <a className="text-accent hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Without it, questions use the Edge voice.</p>
+    </div>
+  )
+}
+
+// Two kinds of nudge: the in-app reminders, and one desktop notification that works with Cram closed.
+function RemindersSection() {
+  const [rem, setRem] = useState(null); const [err, setErr] = useState('')
+  useEffect(() => { api.get('/api/reminder').then(r => r.error ? setErr(r.error) : setRem(r)) }, [])
+  const setR = async patch => { const prev = rem, next = { ...rem, ...patch }; setRem(next); if (!next.enabled && !('enabled' in patch)) return; const r = await api.post('/api/reminder', next); if (r.error) { setErr(r.error); setRem(prev) } else setErr('') }
+  return (
+    <div>
+      <SectionTitle title="Reminders" sub="When Cram should tap you on the shoulder." />
+      <RemindersPanel />
+      <div className="panel p-3 mb-3 flex flex-col gap-2.5">
+        <div className="flex items-center gap-2"><span className="text-xs font-semibold text-white flex-1">Daily reminder when Cram is closed</span>
+          {rem?.supported !== false && <>
+            <select className="input w-auto py-1 text-xs" disabled={!rem} value={rem?.hour ?? 19} onChange={e => setR({ hour: +e.target.value })}>{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>after {String(h).padStart(2, '0')}:00</option>)}</select>
+            <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5"><Pill disabled={!rem} on={rem && !rem.enabled} onClick={() => setR({ enabled: false })}>off</Pill><Pill disabled={!rem} on={rem?.enabled} onClick={() => setR({ enabled: true })}>on</Pill></div>
+          </>}</div>
+        <p className="text-[11px] text-dim -mt-1">{rem?.supported === false ? 'Needs Linux: it runs from cron.' : 'A desktop notification at most once a day, and only when you have not studied for 20 hours. Works even when the app is closed.'}</p>
+        {err && <div className="text-xs text-error">{err}</div>}
+      </div>
+    </div>
+  )
+}
+
+function ArticlesSection({ settings, onChange }) {
+  return (
+    <div>
+      <SectionTitle title="Daily articles" sub="Reading material written for you while Cram is open." />
+      <div className="panel p-3">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-white">Write two articles a day</div>
+            {/* saved on click, not on Save: one switch should not depend on remembering the button below */}
+            <p className="text-[11px] text-dim mt-1">Two articles a day about what you study, each a 10-minute read with a discussion under it. Written while Cram is open; they appear in Blog and ring the bell.</p>
+          </div>
+          <button type="button" role="switch" aria-checked={!!settings?.blogDaily} aria-label="Write two articles a day"
+            onClick={async () => { await api.post('/api/settings', { blogDaily: !settings?.blogDaily }); onChange() }}
+            className={`w-8 h-[18px] rounded-full relative transition-colors flex-shrink-0 ${settings?.blogDaily ? 'bg-accent' : 'bg-panel-2'}`}>
+            <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all ${settings?.blogDaily ? 'left-[16px]' : 'left-[2px]'}`} />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AppearanceSection() {
+  const [theme, setT] = useState(getTheme())
+  return (
+    <div>
+      <SectionTitle title="Appearance" sub="Applies immediately." />
+      <div className="panel p-3 flex items-center gap-2">
+        <span className="text-xs font-semibold text-white flex-1">Theme</span>
+        <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5">{['dark', 'light'].map(t => <Pill key={t} on={theme === t} onClick={() => { setTheme(t); setT(t) }}>{t}</Pill>)}</div>
+      </div>
+    </div>
+  )
+}
+
+// Phone: Cram as a home-screen app (PWA). The phone is only a screen; this computer does the work, so it must be on with Cram open.
+function PhoneSection({ p }) {
+  const link = `https://${p.host || '<your-pc>.<tailnet>.ts.net'}/?key=${p.key}`
+  const Code = ({ children }) => <div className="font-mono text-[11px] text-white bg-app border border-border rounded-md px-2 py-1 mt-1 break-all select-all">{children}</div>
+  return (
+    <div>
+      <SectionTitle title="Phone" sub="Cram on your phone, driven by this computer." />
+      <div className="panel p-3">
+        <div className="flex items-center"><span className="text-xs font-semibold text-white flex-1">Home-screen app</span><span className={`badge ${p.host ? 'badge-green' : ''}`}>{p.host ? 'Tailscale on' : 'Tailscale not found'}</span></div>
+        <p className="text-[11px] text-dim mt-1">Use Cram on Android or iPhone while this computer is on and Cram is open. Install Tailscale here and on the phone (same account), then run once on this computer:</p>
+        <Code>sudo tailscale serve --bg {p.port}</Code>
+        <p className="text-[11px] text-dim mt-2">Open this link on the phone, then Add to Home Screen (iPhone: Safari → Share). Keep the link private: it opens your Cram.</p>
+        <Code>{link}</Code>
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsModal({ settings, onClose, onChange }) {
-  const [key, setKey] = useState(''); const [model, setModel] = useState('claude-opus-5'); const [provider, setProvider] = useState('auto'); const [code, setCode] = useState(''); const [pending, setPending] = useState(false); const [err, setErr] = useState('')
+  const [tab, setTab] = useState('ai')
+  const [key, setKey] = useState(''); const [model, setModel] = useState('claude-opus-5'); const [provider, setProvider] = useState('auto')
   const [gkey, setGkey] = useState('')
+  const [code, setCode] = useState(''); const [pending, setPending] = useState(false); const [authErr, setAuthErr] = useState('')
+  // lifted out of the phone panel: api.get turns a 404 from an older server into { error }, not null,
+  // so the panel could not tell "no Tailscale" from "this server has no phone support" — now the tab just hides.
+  const [phone, setPhone] = useState(null)
+  useEffect(() => { api.get('/api/phone').then(r => setPhone(r?.error ? null : r)).catch(() => setPhone(null)) }, [])
   useEffect(() => { if (settings) { setKey(settings.apiKey || ''); setGkey(settings.geminiKey || ''); setModel(settings.model); setProvider(settings.provider || 'auto') } }, [settings])
-  const signedIn = settings?.source === 'claude'
-  const signIn = async () => { await api.post('/api/auth/start', {}); setPending(true) }
-  const finish = async () => { const r = await api.post('/api/auth/code', { code }); if (r.error) return setErr(r.error); setCode(''); setPending(false); setErr(''); onChange() }
-  const signOut = async () => { await api.post('/api/auth/logout', {}); onChange() }
   const save = async () => { await api.post('/api/settings', { apiKey: key, geminiKey: gkey, model, provider }); onChange(); onClose() }
   useEffect(() => { const k = e => e.key === 'Escape' && onClose(); window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
+
+  const TABS = [
+    ['ai', 'AI'],
+    ['voice', 'Voice'],
+    ['reminders', 'Reminders'],
+    ['articles', 'Daily articles'],
+    ['appearance', 'Appearance'],
+    ...(phone ? [['phone', 'Phone']] : []),
+  ]
   return (
     <div className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
-      <div className="island w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex items-start mb-5"><div className="flex-1"><h1 className="text-xl font-semibold text-white">Settings</h1><p className="text-sm text-dim mt-0.5">How Cram reaches Claude, the interviewer's voice, reminders and your keys.</p></div><button onClick={onClose} title="Close (Esc)" aria-label="Close settings" className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5">✕</button></div>
-        <div className="panel p-3 mb-3">
-          <div className="flex items-center"><span className="text-xs font-semibold text-white flex-1">Claude Code CLI</span><span className={`badge ${settings?.cli ? 'badge-green' : ''}`}>{settings?.cli ? 'installed · uses your login' : 'not found'}</span></div>
-          <p className="text-[11px] text-dim mt-1">Preferred when present: runs on your Claude subscription through the <span className="font-mono">claude</span> CLI, which is not throttled like raw API calls.</p>
-          <label className="text-[11px] uppercase tracking-wider text-dim mt-2 block">Provider</label>
-          <select className="input mt-1" value={provider} onChange={e => setProvider(e.target.value)}><option value="auto">Auto (CLI if installed, else account / key)</option><option value="api">API only (account or key)</option></select>
+      <div className="island w-[900px] max-w-[94vw] h-[720px] max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start px-5 py-4 border-b border-border flex-shrink-0">
+          <div className="flex-1"><h1 className="text-lg font-semibold text-white">Settings</h1><p className="text-xs text-dim mt-0.5">How Cram reaches its AI, the interviewer's voice, reminders and your keys.</p></div>
+          <button onClick={onClose} title="Close (Esc)" aria-label="Close settings" className="w-7 h-7 rounded text-dim hover:text-white hover:bg-white/5">✕</button>
         </div>
-        <div className="panel p-3 mb-4">
-          <div className="flex items-center mb-2"><span className="text-xs font-semibold text-white flex-1">Claude account</span><span className={`badge ${signedIn ? 'badge-green' : ''}`}>{signedIn ? 'signed in' : 'signed out'}</span></div>
-          {signedIn ? <button className="btn btn-ghost" onClick={signOut}>Sign out</button> : <>
-            <button className="btn btn-primary" onClick={signIn}>Sign in with Claude</button>
-            {pending && <div className="flex gap-2 mt-2"><input className="input flex-1" placeholder="Paste the code from the browser page" value={code} onChange={e => setCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && finish()} /><button className="btn btn-primary" onClick={finish}>Finish</button></div>}
-            <p className="text-[11px] text-dim mt-2">Uses your Claude subscription, like Claude Code. A browser tab opens; copy the code it shows and paste it here.</p>
-          </>}
-          {err && <div className="text-xs text-error mt-2">{err}</div>}
-        </div>
-        <div className="panel p-3 mb-3">
-          <div className="flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-semibold text-white">Daily articles</div>
-              {/* saved on click, not on Save: one switch should not depend on remembering the button below */}
-              <p className="text-[11px] text-dim mt-1">Two articles a day about what you study, each a 10-minute read with a discussion under it. Written while Cram is open; they appear in Blog and ring the bell.</p>
-            </div>
-            <button type="button" role="switch" aria-checked={!!settings?.blogDaily} aria-label="Write two articles a day"
-              onClick={async () => { await api.post('/api/settings', { blogDaily: !settings?.blogDaily }); onChange() }}
-              className={`w-8 h-[18px] rounded-full relative transition-colors flex-shrink-0 ${settings?.blogDaily ? 'bg-accent' : 'bg-panel-2'}`}>
-              <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all ${settings?.blogDaily ? 'left-[16px]' : 'left-[2px]'}`} />
-            </button>
+        <div className="flex flex-1 min-h-0">
+          <div className="w-44 flex-shrink-0 border-e border-border py-2 bg-app/40 overflow-y-auto">
+            {TABS.map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)}
+                className={`w-full text-start px-4 py-2 text-xs transition-colors ${tab === id ? 'text-white bg-accent/10 border-e-2 border-accent font-medium' : 'text-dim hover:text-white hover:bg-white/[0.04]'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 min-w-0 overflow-y-auto p-5">
+            {tab === 'ai' && <AiSection settings={settings} onChange={onChange} provider={provider} setProvider={setProvider} apiKey={key} setApiKey={setKey} model={model} setModel={setModel} auth={{ code, setCode, pending, setPending, err: authErr, setErr: setAuthErr }} />}
+            {tab === 'voice' && <VoiceSection settings={settings} onChange={onChange} gkey={gkey} setGkey={setGkey} />}
+            {tab === 'reminders' && <RemindersSection />}
+            {tab === 'articles' && <ArticlesSection settings={settings} onChange={onChange} />}
+            {tab === 'appearance' && <AppearanceSection />}
+            {tab === 'phone' && phone && <PhoneSection p={phone} />}
           </div>
         </div>
-        <ElevenPanel settings={settings} onChange={onChange} />
-        <RemindersPanel />
-        <Extras />
-        <label className="text-[11px] uppercase tracking-wider text-dim">API key (pay-as-you-go fallback)</label>
-        <input className="input mt-1 mb-3 font-mono text-xs" value={key} onChange={e => setKey(e.target.value)} placeholder="sk-ant-…" />
-        <label className="text-[11px] uppercase tracking-wider text-dim">Gemini API key (human-like interviewer voice)</label>
-        <input className="input mt-1 font-mono text-xs" value={gkey} onChange={e => setGkey(e.target.value)} placeholder="AIza…" />
-        <p className="text-[11px] text-dim mt-1 mb-3">Get one at <a className="text-accent hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Without it, questions use the Edge voice.</p>
-        <label className="text-[11px] uppercase tracking-wider text-dim">Model</label>
-        <select className="input mt-1 mb-4" value={model} onChange={e => setModel(e.target.value)}>{(settings?.models || ['claude-opus-5']).map(m => <option key={m}>{m}</option>)}</select>
-        <div className="flex items-center"><span className="text-[11px] text-dim">Cram by Mohamed Emad · thegeekym@gmail.com</span><div className="flex-1" /><button className="btn btn-primary" onClick={save}>Save</button></div>
+        <div className="flex items-center px-5 py-3 border-t border-border flex-shrink-0">
+          <span className="text-[11px] text-dim">Cram by Mohamed Emad · thegeekym@gmail.com</span><div className="flex-1" />
+          <button className="btn btn-primary" onClick={save}>Save</button>
+        </div>
       </div>
     </div>
   )

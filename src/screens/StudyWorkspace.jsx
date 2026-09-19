@@ -24,10 +24,36 @@ export const WS_TOOLS = [
 // ---------- the study's PDF: chapter list on the left (with Ask / Quiz / Cards per chapter), the PDF on the right ----------
 // ponytail: the PDF is Chromium's built-in viewer, whose text selection the page cannot read, so actions work per chapter
 function Source({ study, jump, onAsk, onOpenInterview }) {
-  const [o, setO] = useState(null); const [page, setPage] = useState(1); const [frame, setFrame] = useState(0); const [open, setOpen] = useState({})
+  const [o, setO] = useState(null); const [job, setJob] = useState(null); const [page, setPage] = useState(1); const [frame, setFrame] = useState(0); const [open, setOpen] = useState({})
   const [act, setAct] = useState(''); const [note, setNote] = useState('')
-  const load = refresh => { setO(null); api.get(`/api/studies/${study.id}/outline${refresh ? '?refresh=1' : ''}`).then(setO).catch(e => setO({ error: e.message })) }
-  useEffect(() => load(false), [study.id]) // eslint-disable-line
+  // Planning a chapter list is a 15-130s model call, so watch it arrive rather than showing one frozen
+  // sentence: the server streams a count and the tail of what it is writing. A cached plan comes back as
+  // plain JSON on the same route, which the content type tells us.
+  const load = async refresh => {
+    setO(null); setJob({ log: [], live: null })
+    const at = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    const note = text => setJob(j => j && { ...j, log: [...j.log, { at: at(), text }] })
+    try {
+      const res = await fetch(`/api/studies/${study.id}/outline?stream=1${refresh ? '&refresh=1' : ''}`)
+      if (!/ndjson/.test(res.headers.get('content-type') || '')) { const r = await res.json(); setJob(null); return setO(r) }
+      const reader = res.body.getReader(), dec = new TextDecoder(); let buf = ''
+      for (;;) {
+        const { value, done } = await reader.read(); buf += dec.decode(value || new Uint8Array(), { stream: !done })
+        const lines = buf.split('\n'); buf = done ? '' : lines.pop()
+        for (const l of lines.filter(x => x.trim())) {
+          const m = JSON.parse(l)
+          if (m.stage === 'planning') note(study.hasPdf ? 'Reading the contents…' : 'Reading your subject and level…')
+          else if (m.progress) setJob(j => j && { ...j, live: m.progress })
+          else if (m.result) { note(`${(m.result.items || []).filter(i => !i.depth).length} chapters planned`); setO(m.result); setJob(null) }
+          else if (m.error) { setO({ error: m.error }); setJob(null) }
+        }
+        if (done) break
+      }
+    } catch (e) { setO({ error: e.message }); setJob(null) }
+  }
+  // braces matter: load is async, and an effect that returns a Promise makes React call it as the
+  // cleanup function on unmount ("l is not a function" once minified)
+  useEffect(() => { load(false) }, [study.id]) // eslint-disable-line
   const go = p => { setPage(p); setFrame(j => j + 1) } // remount the frame: a hash-only change does not move the PDF viewer
   useEffect(() => { if (jump?.p) go(jump.p) }, [jump?.n]) // a (p. N) citation clicked in the chat
   const pdf = study.hasPdf // a subject study has the same chapter list, planned by Claude, with no pages and no viewer beside it
@@ -49,14 +75,48 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
   }
   return (
     <div className="h-full flex gap-2.5 p-2.5 min-h-0">
-      <aside className={`island flex flex-col min-h-0 ${pdf ? 'w-80 flex-shrink-0' : 'flex-1 max-w-3xl mx-auto w-full'}`}>
-        <div className="panel-header flex items-center gap-2">Chapters{items.length > 0 && <span className="normal-case tracking-normal font-normal text-dim">· {chapters.length}</span>}
+      {/* a PDF's chapter list is a sidebar, so it stays a panel; a planned list is the page itself,
+          and wrapping cards in another box just boxes a box */}
+      <aside className={`flex flex-col min-h-0 ${pdf ? 'island w-80 flex-shrink-0' : 'flex-1 max-w-4xl mx-auto w-full'}`}>
+        <div className={`flex items-center gap-2 ${pdf ? 'panel-header' : 'px-1 pb-2 text-[10px] uppercase tracking-[0.18em] text-dim'}`}>Chapters{items.length > 0 && <span className="normal-case tracking-normal font-normal text-dim">· {chapters.length}</span>}
           {o && !o.error && <button onClick={() => load(true)} className="ml-auto normal-case tracking-normal font-normal text-[11px] text-dim hover:text-white" title="Read the chapters again">Refresh</button>}</div>
-        <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5" dir="auto">
-          {!o && <div className="text-xs text-dim text-center py-8 px-4">{pdf ? 'Reading the chapters…' : 'Planning your chapters…'}<div className="mt-1 text-[11px]">{pdf ? 'A PDF without bookmarks is read by Claude once, which can take a minute.' : 'Claude plans this once for your subject and level. It can take a minute.'}</div></div>}
+        <div className={`flex-1 overflow-y-auto flex flex-col ${pdf ? 'p-1.5 gap-0.5' : 'gap-2.5 pb-2'}`} dir="auto">
+          {!o && <div className="text-xs text-dim py-6 px-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-gray-200"><span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin flex-shrink-0" />{pdf ? 'Reading the chapters…' : 'Planning your chapters…'}</div>
+            {job?.live?.titles > 0 && <div className="text-[11px] text-gray-300">{job.live.chapters || 0} chapter{job.live.chapters === 1 ? '' : 's'} · {job.live.titles} title{job.live.titles === 1 ? '' : 's'} so far</div>}
+            {/* what the model is writing right now, so a long wait visibly moves */}
+            {job?.live?.tail && <div className="text-[10px] font-mono bg-app/60 border border-border rounded-md px-2 py-1.5 break-words line-clamp-3" dir="auto">…{job.live.tail}</div>}
+            {!!job?.log?.length && <div className="flex flex-col gap-0.5 font-mono text-[10px]">{job.log.map((l, i) => <div key={i} dir="auto"><span className="text-dim/60">{l.at}</span> {l.text}</div>)}</div>}
+            <div className="text-[11px]">{pdf ? 'A PDF without bookmarks is read by Claude once, which can take a minute.' : 'Claude plans this once for your subject and level. It can take a minute.'}</div>
+          </div>}
           {o?.error && <div className="text-xs text-error text-center py-8 px-4">{o.error}<div><button onClick={() => load(true)} className="btn-tint mt-2">Try again</button></div></div>}
           {o && !o.error && !items.length && <div className="text-xs text-dim text-center py-8 px-4">{pdf ? 'No chapters found in this PDF.' : 'No chapters came back. Try Refresh.'}</div>}
-          {chapters.map((c, i) => (
+          {/* A planned chapter list is read, not navigated: each chapter is a card with its sections
+              shown and its actions always visible. A PDF keeps the compact sidebar rows beside the viewer. */}
+          {!pdf && chapters.map((c, i) => (
+            <article key={i} className="rounded-xl border border-border bg-app/50 p-3.5 flex flex-col gap-2.5 hover:border-accent/40 transition-colors">
+              <div className="flex items-start gap-3">
+                <span className="w-7 h-7 rounded-lg bg-accent/15 text-accent grid place-items-center text-xs font-bold flex-shrink-0">{i + 1}</span>
+                <h3 className="text-sm font-semibold text-white leading-snug flex-1 min-w-0 pt-1" dir="auto">{c.title}</h3>
+              </div>
+              {!!c.kids.length && (
+                <ul className="flex flex-col gap-1 ps-10">
+                  {c.kids.map((k, j) => (
+                    <li key={j} className="text-xs text-gray-300 flex gap-2 leading-relaxed" dir="auto">
+                      <span className="text-dim/60 flex-shrink-0">•</span><span className="min-w-0">{k.title}</span>
+                    </li>))}
+                </ul>)}
+              <div className="flex items-center gap-1.5 ps-10 flex-wrap">
+                {[['ask', 'Ask', 'Explain this chapter in the chat', () => onAsk(`Explain the chapter ${label(c)}: the key ideas in simple words, with examples.`)],
+                  ['quiz', 'Quiz', 'Start an interview on this chapter only', () => quiz(c, i)],
+                  ['cards', 'Cards', 'Make 10 flashcards from this chapter', () => cards(c, i)]].map(([k, l, t, f]) => (
+                  <button key={k} onClick={f} disabled={!!act} title={t}
+                    className="text-[11px] px-2.5 py-1 rounded-md bg-panel-2 text-dim hover:text-white hover:bg-white/10 disabled:opacity-40 transition-colors">
+                    {act === `${i}:${k}` ? '…' : l}
+                  </button>))}
+              </div>
+            </article>))}
+          {pdf && chapters.map((c, i) => (
             <div key={i}>
               <div className={`group flex items-center rounded-lg ${current === c ? 'bg-accent/15 text-white' : 'text-gray-300 hover:bg-white/5'}`}>
                 <button onClick={() => setOpen(x => ({ ...x, [i]: !x[i] }))} disabled={!c.kids.length} className={`w-6 h-7 grid place-items-center text-dim flex-shrink-0 ${c.kids.length ? 'hover:text-white' : 'opacity-0'}`} aria-label={open[i] ? 'Hide sections' : 'Show sections'}>
@@ -78,7 +138,7 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
         </div>
         {note && <div className="px-3 py-2 border-t border-border text-[11px] text-gray-300">{note}</div>}
         {o?.from === 'ai' && <div className="px-3 py-2 border-t border-border text-[10px] text-dim">This PDF has no bookmarks, so Claude read the contents. Page numbers can be a page or two off.</div>}
-        {o?.from === 'subject' && <div className="px-3 py-2 border-t border-border text-[10px] text-dim">A plan of what to study, for your level — the chapters are empty. Ask, Quiz and Cards work on any of them; Refresh plans again.</div>}
+        {o?.from === 'subject' && <div className="px-1 pt-2 text-[10px] text-dim">A plan of what to study, for your level — the chapters are empty. Ask, Quiz and Cards work on any of them; Refresh plans again.</div>}
       </aside>
       {pdf && <div className="island flex-1 min-w-0 overflow-hidden"><iframe key={frame} src={`/api/studies/${study.id}/source.pdf#page=${page}`} title={`${study.title} PDF`} className="w-full h-full border-0" /></div>}
     </div>
@@ -102,7 +162,7 @@ export default function StudyWorkspace({ study, setStudy, tool, setTool, onChang
         {tool === 'review' && <Review studies={one} scope={study.id} bar="study" onChanged={onChanged} />}
         {tool === 'coach' && <div className="h-full px-2.5 pb-2.5"><StudyCoach studyId={study.id} bar="study" onBack={() => setTool('chat')} /></div>}
       </div>
-      {side && createPortal(<aside className="island w-56 flex-shrink-0 flex flex-col p-2 gap-0.5 overflow-y-auto">
+      {side && createPortal(<aside className="island w-72 flex-shrink-0 flex flex-col p-2 gap-0.5 overflow-y-auto">
         <div className="px-2.5 pt-2 pb-3">
           <div className="text-sm font-semibold text-white truncate" dir="auto" title={study.title}>{study.title}</div>
           <div className="text-[11px] text-dim truncate" dir="auto">{study.subject || (study.hasPdf ? 'From a PDF' : 'Study')}{study.hasPdf && study.subject ? ' · PDF' : ''}</div>

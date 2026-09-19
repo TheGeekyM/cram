@@ -1,52 +1,62 @@
-// Claude Code CLI as a provider: uses the user's Claude login with no API rate limits (same
-// trick as aidle). Streams text deltas from `claude -p --output-format stream-json`.
+// One spawn path for every AI CLI. providers.js says which binary, which flags, and how to read
+// its stream; this file runs it and turns the normalised events into { ok, text }.
+//
+// The Claude path is unchanged from when this file only knew Claude: same flags, same events,
+// same dedup. Other providers differ in two ways that matter — no --append-system-prompt (so the
+// system prompt goes at the top of the prompt) and no PDF (only Claude can be pointed at a file).
 const { spawn } = require('child_process');
-const fs = require('fs');
 const os = require('os');
-const path = require('path');
+const providers = require('./providers');
 
-const NO_TOOLS = 'Write,Edit,MultiEdit,NotebookEdit,Bash,Read,Grep,Glob,LS,WebFetch,WebSearch,Task,Agent,TodoWrite';
-const READ_ONLY = NO_TOOLS.replace('Read,', '');
+// no argument = Claude, so old callers keep working
+exports.available = (id = providers.DEFAULT_PROVIDER) => !!providers.findBin(id);
 
-function bin() {
-  const dirs = [...(process.env.PATH || '').split(path.delimiter), path.join(os.homedir(), '.local/bin'), '/usr/local/bin', path.join(os.homedir(), '.npm-global/bin'), '/opt/homebrew/bin'];
-  for (const d of dirs) { const p = path.join(d, 'claude'); if (d && fs.existsSync(p)) return p; }
-  return null;
-}
-exports.available = () => !!bin();
+exports.stream = ({ provider = providers.DEFAULT_PROVIDER, system, messages, model, pdf, key = '',
+  onDelta = () => {}, timeout = 600000, signal, web = false }) => new Promise(resolve => {
+  const p = providers.PROVIDERS[provider] || providers.PROVIDERS[providers.DEFAULT_PROVIDER];
+  const bin = providers.findBin(p.id);
+  if (!bin) return resolve({ ok: false, message: providers.missingBinMessage(p.id) });
 
-// messages: [{role, content:string}] → one prompt on stdin. ponytail: history is flattened
-// into the prompt; switch to --resume session ids if long chats get slow.
-exports.stream = ({ system, messages, model, pdf, onDelta = () => {}, timeout = 600000, signal, web = false }) => new Promise(resolve => {
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', model,
-    '--permission-mode', 'bypassPermissions', '--append-system-prompt', system, '--disallowedTools', (pdf ? READ_ONLY : NO_TOOLS).replace(web ? 'WebFetch,WebSearch,' : '\0', '')]; // web: opt-in search for calls that need real links
-  if (pdf) args.push('--add-dir', path.dirname(pdf));
+  const usePdf = pdf && p.pdf ? pdf : null; // a CLI that cannot read the file is not told about it
+  const args = p.args({ model, system, pdf: usePdf, web });
   const convo = messages.map(m => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`).join('\n\n');
-  const prompt = (pdf ? `The study material is the PDF at ${pdf}. Read it with the Read tool before answering (all pages that matter). Do not mention the file path or the tool.\n\n` : '') + convo + '\n\nAssistant:';
-  let child; try { child = spawn(bin(), args, { cwd: os.tmpdir(), env: { ...process.env, PATH: [process.env.PATH, path.join(os.homedir(), '.local/bin'), '/usr/local/bin'].join(path.delimiter) } }); }
+  const head = p.sysFlag ? '' : `${system}\n\n---\n\n`; // no system flag: same words, top of the prompt
+  const prompt = head
+    + (usePdf ? `The study material is the PDF at ${usePdf}. Read it with the Read tool before answering (all pages that matter). Do not mention the file path or the tool.\n\n` : '')
+    + convo + '\n\nAssistant:';
+
+  let child;
+  try { child = spawn(bin, args, { cwd: os.tmpdir(), env: { ...process.env, PATH: providers.enrichedPath(), ...p.env(key) } }); }
   catch (e) { return resolve({ ok: false, message: e.message }); }
+
   let buf = '', err = '', text = '', final = null, sawPartial = false; const t0 = Date.now(); let first = false;
-  const mark = () => { if (!first) { first = true; console.log(`         [cli] first token after ${((Date.now() - t0) / 1000).toFixed(1)}s`); } };
-  const timer = setTimeout(() => { child.kill(); resolve({ ok: false, message: 'Claude CLI timed out' }); }, timeout);
-  signal?.addEventListener('abort', () => child.kill()); // user pressed Stop: close resolves with whatever text arrived
+  const mark = () => { if (!first) { first = true; console.log(`         [cli] ${p.cliName} first token after ${((Date.now() - t0) / 1000).toFixed(1)}s`); } };
+  const timer = setTimeout(() => { child.kill(); resolve({ ok: false, message: `${p.label} timed out` }); }, timeout);
+  signal?.addEventListener('abort', () => child.kill()); // user pressed Stop: resolve with whatever arrived
+
   child.stdout.on('data', d => {
     buf += d; const lines = buf.split('\n'); buf = lines.pop();
     for (const line of lines) {
-      let e; try { e = JSON.parse(line); } catch { continue; }
-      if (e.type === 'stream_event' && e.event?.type === 'content_block_delta' && e.event.delta?.text) { mark(); sawPartial = true; text += e.event.delta.text; onDelta(e.event.delta.text); }
-      else if (e.type === 'assistant' && !sawPartial) for (const b of e.message?.content || []) if (b.type === 'text' && b.text) { text += b.text; onDelta(b.text); }
-      else if (e.type === 'assistant') for (const b of e.message?.content || []) if (b.type === 'tool_use') console.log(`         [cli] tool ${b.name} ${JSON.stringify(b.input).slice(0, 80)}`);
-      else if (e.type === 'result') final = e;
+      const s = line.trim(); if (!s) continue;
+      let e; try { e = JSON.parse(s); } catch { continue; } // banners and other noise
+      let evs; try { evs = p.parse(e) || []; } catch { evs = []; }
+      for (const ev of evs) {
+        if (ev.kind === 'text') {
+          // Claude sends word-by-word deltas AND a whole copy of each block; gemini only whole
+          // blocks. Take the deltas when there are any, the whole blocks when there are not.
+          if (ev.partial) { sawPartial = true; mark(); text += ev.text; onDelta(ev.text); }
+          else if (!sawPartial) { mark(); text += ev.text; onDelta(ev.text); }
+        } else if (ev.kind === 'result') final = ev;
+      }
     }
   });
   child.stderr.on('data', d => err += d);
   child.on('error', e => { clearTimeout(timer); resolve({ ok: false, message: e.message }); });
   child.on('close', code => {
     clearTimeout(timer);
-    const failed = final?.is_error || /^error/.test(final?.subtype || '');
-    if (failed) return resolve({ ok: false, message: final.result || final.subtype });
-    if (!text.trim() && final?.result) { text = final.result; onDelta(text); }
-    if (code !== 0 && !text.trim()) return resolve({ ok: false, message: err.trim().split('\n').slice(-2).join(' ') || `claude exited ${code}` });
+    if (final?.error) return resolve({ ok: false, message: final.error });
+    if (!text.trim() && final?.text) { text = final.text; onDelta(text); }
+    if (code !== 0 && !text.trim()) return resolve({ ok: false, message: err.trim().split('\n').slice(-2).join(' ') || `${p.cliName} exited ${code}` });
     resolve({ ok: true, text });
   });
   child.stdin.end(prompt);

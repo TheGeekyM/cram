@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
 import { ask } from '../components/Confirm.jsx'
-import NotificationBell from '../components/NotificationBell.jsx'
 
 // Student dashboard: coach banner, continue-learning
 // cards, weekly ring, to-do list. Stats come from /api/dashboard, advice from /api/coach.
@@ -83,7 +82,8 @@ function StudyCard({ s, onOpen, onChanged }) {
 function Row({ s, onOpen, onDelete, onExport }) {
   const [menu, setMenu] = useState(false)
   return (
-    <div onClick={() => onOpen(s.id)} className="group flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 cursor-pointer relative">
+    // its own tile, like the two buttons above it: a gap between transparent rows is invisible
+    <div onClick={() => onOpen(s.id)} className="island group flex items-center gap-3 px-3.5 py-3 hover:border-accent/40 hover:bg-white/5 cursor-pointer relative transition-colors">
       <span className="text-dim"><Ico d={s.hasPdf ? I.pdf : I.book} /></span>
       <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-white truncate">{s.title}</div><div className="text-[11px] text-dim truncate">{s.subject || (s.hasPdf ? 'PDF' : '')}{s.subject && s.hasPdf ? ' · PDF' : ''}</div></div>
       <span className="text-[11px] text-dim">{new Date(s.updatedAt).toLocaleDateString()}</span>
@@ -205,9 +205,9 @@ function Studies({ studies, q, setQ, onOpen, onNew, onDelete, onExport }) {
             <div className="min-w-0"><div className="text-sm font-semibold text-white">{t}</div><div className="text-xs text-dim mt-0.5">{sub}</div></div>
           </button>))}
       </div>
-      <div className="island p-1.5">
+      <div className="flex flex-col gap-2">
         {list.length ? list.map(s => <Row key={s.id} s={s} onOpen={onOpen} onDelete={onDelete} onExport={onExport} />)
-          : <div className="text-center text-xs text-dim py-10">{q ? `Nothing matches «${q}».` : 'No studies yet — start from a subject or a PDF.'}</div>}
+          : <div className="island text-center text-xs text-dim py-10">{q ? `Nothing matches «${q}».` : 'No studies yet — start from a subject or a PDF.'}</div>}
       </div>
     </div>
   )
@@ -255,8 +255,8 @@ export default function HomeScreen({ section, studies, settings, profile, onEdit
           <div className="relative flex-1 max-w-md"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-dim"><Ico s={14} d={I.search} /></span><input className="input pl-9 bg-panel" placeholder="Search studies…" value={q} onChange={e => { setQ(e.target.value); if (e.target.value) setSec('studies') }} /></div>
           <div className="flex-1" />
           <button onClick={() => onNew('subject')} className="btn btn-primary text-xs py-1.5 inline-flex items-center gap-1.5"><Ico s={13} d={I.new} />New study</button>
-          {settings && <span className={`badge ${settings.hasKey ? 'badge-green' : 'badge-red'}`}>{settings.hasKey ? `${settings.source === 'cli' ? 'CLI' : settings.source === 'claude' ? 'Claude' : 'key'} · ${settings.model.replace('claude-', '')}` : 'not signed in'}</span>}
-          {sec === 'dashboard' && <NotificationBell />}{/* Studies gets its bell from the app's top bar */}
+          {settings && <span className={`badge ${settings.hasKey ? 'badge-green' : 'badge-red'}`}>{settings.hasKey ? `${settings.source === 'cli' ? 'CLI' : settings.source === 'claude' ? 'Claude' : 'key'} · ${String(settings.model || '').split(':').slice(1).join(':').replace('claude-', '') || String(settings.model || '')}` : 'not signed in'}</span>}
+          {/* no bell here: the window's top bar carries one on every page, this one was its twin */}
         </div>
         {sec === 'dashboard' && <Dashboard profile={profile} dash={dash} coach={coach} coaching={coaching} onCoach={runCoach} onOpenTool={onOpenTool} onNew={onNew} onProfile={onEditProfile} report={report} reporting={reporting} onReport={runReport} onChanged={loadDash} />}
         {sec === 'studies' && <Studies studies={studies} q={q} setQ={setQ} onOpen={onOpen} onNew={onNew} onDelete={askDelete} onExport={exportNotes} />}

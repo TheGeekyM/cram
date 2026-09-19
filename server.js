@@ -17,6 +17,7 @@ const DATA = process.env.CRAM_DATA || path.join(__dirname, 'data');
 // Per-profile paths. They are `let` because activate() re-points them when the profile switches;
 // every reader below resolves them at call time, so nothing needs to know a switch happened.
 const profiles = require('./profiles');
+const providers = require('./providers');
 const roles = require('./roles');
 const rounds = require('./rounds');
 profiles.migrate(DATA); // moves a flat pre-profiles DATA into profiles/default; idempotent, rename-only
@@ -46,7 +47,10 @@ function activate(pid) {
   // is opened. deriveRole is a no-op unless the answers actually changed, so switching costs nothing.
   profiles.deriveRole(DATA, pid, { json, NO_STUDY });
 }
-const MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-haiku-4-5'];
+// Which AI does the work is one string in settings.json — "provider:model". providers.js owns
+// the table of what each provider is and how to drive it; a bare id is an old setting and means Claude.
+const sel = () => providers.parseModel(settings().model);
+const providerKey = id => (settings().providerKeys || {})[id] || '';
 // one line per Claude call: what, which provider/model, then how long it took
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), '[claude]', ...a);
 const timed = async (what, s, fn) => { const t = Date.now(); log(`${what} start · ${useCli() ? 'cli' : auth.signedIn() ? 'oauth' : 'api'} · ${settings().model || 'claude-opus-5'} · pdf=${s.hasPdf ? 'yes' : 'no'}`); try { return await fn(); } finally { log(`${what} done in ${((Date.now() - t) / 1000).toFixed(1)}s`); } };
@@ -54,8 +58,11 @@ const timed = async (what, s, fn) => { const t = Date.now(); log(`${what} start 
 // ---------- settings ----------
 app.get('/api/settings', (req, res) => {
   const s = settings();
-  const source = useCli() ? 'cli' : auth.signedIn() ? 'claude' : (s.apiKey || process.env.ANTHROPIC_API_KEY) ? 'key' : null;
-  res.json({ ...s, provider: s.provider || 'auto', cli: cli.available(), apiKey: s.apiKey ? `${s.apiKey.slice(0, 10)}…${s.apiKey.slice(-4)}` : '', geminiKey: s.geminiKey ? `${s.geminiKey.slice(0, 6)}…${s.geminiKey.slice(-4)}` : '', elevenKey: s.elevenKey ? `${s.elevenKey.slice(0, 6)}…${s.elevenKey.slice(-4)}` : '', elevenKey2: s.elevenKey2 ? `${s.elevenKey2.slice(0, 6)}…${s.elevenKey2.slice(-4)}` : '', hasKey: !!source, source, models: MODELS });
+  const { provider } = sel();
+  const source = useCli() ? 'cli'
+    : provider !== 'claude' ? (providerKey(provider) ? 'key' : null)
+    : auth.signedIn() ? 'claude' : (s.apiKey || process.env.ANTHROPIC_API_KEY) ? 'key' : null;
+  res.json({ ...s, provider: s.provider || 'auto', cli: cli.available(), apiKey: s.apiKey ? `${s.apiKey.slice(0, 10)}…${s.apiKey.slice(-4)}` : '', geminiKey: s.geminiKey ? `${s.geminiKey.slice(0, 6)}…${s.geminiKey.slice(-4)}` : '', elevenKey: s.elevenKey ? `${s.elevenKey.slice(0, 6)}…${s.elevenKey.slice(-4)}` : '', elevenKey2: s.elevenKey2 ? `${s.elevenKey2.slice(0, 6)}…${s.elevenKey2.slice(-4)}` : '', hasKey: !!source, source, providerKeys: undefined, model: providers.joinModel(provider, sel().model), providers: providers.list(s.providerKeys || {}) });
 });
 app.post('/api/settings', (req, res) => {
   const s = settings();
@@ -63,7 +70,13 @@ app.post('/api/settings', (req, res) => {
   for (const k of ['elevenKey', 'elevenKey2']) if (typeof req.body[k] === 'string' && !req.body[k].includes('…')) s[k] = req.body[k].trim();
   if (['eleven_v3', 'eleven_multilingual_v2', 'eleven_flash_v2_5'].includes(req.body.elevenModel)) s.elevenModel = req.body.elevenModel;
   if (typeof req.body.geminiKey === 'string' && !req.body.geminiKey.includes('…')) s.geminiKey = req.body.geminiKey.trim(); // empty clears it
-  if (MODELS.includes(req.body.model)) s.model = req.body.model;
+  // stored qualified; knownModel also accepts the bare claude id written here before providers existed
+  if (providers.knownModel(req.body.model)) { const m = providers.parseModel(req.body.model); s.model = providers.joinModel(m.provider, m.model); }
+  if (req.body.providerKey && providers.PROVIDERS[req.body.providerKey.id]) {
+    const keys = { ...(s.providerKeys || {}) }, k = String(req.body.providerKey.key || '').trim();
+    if (k && !k.includes('…')) keys[req.body.providerKey.id] = k; else if (!k) delete keys[req.body.providerKey.id];
+    s.providerKeys = keys;
+  }
   if (['auto', 'api'].includes(req.body.provider)) s.provider = req.body.provider;
   if (typeof req.body.blogDaily === 'boolean') s.blogDaily = req.body.blogDaily; // two articles a day, written while Cram is open
   fs.writeFileSync(SETTINGS, JSON.stringify(s)); res.json({ ok: true });
@@ -76,9 +89,24 @@ app.post('/api/auth/logout', (req, res) => { auth.logout(); res.json({ ok: true 
 
 // ---------- claude ----------
 // Provider order: Claude Code CLI (subscription, no API throttling) → OAuth token → API key.
-const useCli = () => (settings().provider || 'auto') !== 'api' && cli.available();
+// Which way a call goes. Claude: its own CLI, else OAuth/key over the API. A provider with an
+// Anthropic-compatible endpoint can go either way. Everything else is CLI-only, and cli.stream
+// explains plainly when the binary is missing rather than failing somewhere deeper.
+const useCli = () => {
+  const { provider } = sel();
+  const apiOnly = (settings().provider || 'auto') === 'api';
+  if (provider === 'claude') return !apiOnly && cli.available('claude');
+  const p = providers.PROVIDERS[provider];
+  if (p.baseURL) return !apiOnly && cli.available(provider) && !!providerKey(provider);
+  return true;
+};
 // OAuth (subscription) first, API key as fallback. OAuth needs its beta flag on every request.
 async function client() {
+  const { provider } = sel();
+  const p = providers.PROVIDERS[provider];
+  // An Anthropic-compatible endpoint is this same SDK pointed elsewhere — with none of Anthropic's
+  // own beta flags, which such an endpoint rejects. betas: null means "the plain messages API".
+  if (p.baseURL) return { c: new Anthropic({ baseURL: p.baseURL, apiKey: providerKey(provider) || 'none' }), betas: null };
   const tok = await auth.token();
   if (tok) return { c: new Anthropic({ authToken: tok }), betas: ['server-side-fallback-2026-07-01', auth.OAUTH_BETA] };
   return { c: new Anthropic({ apiKey: settings().apiKey || process.env.ANTHROPIC_API_KEY }), betas: ['server-side-fallback-2026-07-01'] };
@@ -105,7 +133,13 @@ function context(s) {
 }
 const req = (s, messages, extra = {}) => {
   const { system, prefix } = context(s);
-  return { model: settings().model || 'claude-opus-5', max_tokens: 16000, fallbacks: 'default', system, ...extra, messages: [...prefix, ...messages] };
+  const { provider, model } = sel();
+  const p = providers.PROVIDERS[provider];
+  // the bare half of the id: "claude:claude-opus-5" is not a model name any endpoint knows.
+  // The PDF rides along as a base64 document, which only Anthropic's own API accepts.
+  const base = { model, max_tokens: 16000, system, ...extra, messages: [...(p.pdf ? prefix : []), ...messages] };
+  if (!p.baseURL) base.fallbacks = 'default'; // an Anthropic-only convenience
+  return base;
 };
 // stream text deltas straight to the HTTP response; returns full text
 const streamText = (res, s, messages, extra) => timed(`stream ${res.req.path}`, s, () => streamText0(res, s, messages, extra));
@@ -115,13 +149,15 @@ async function streamText0(res, s, messages, extra) {
   const ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); }); // client hit Stop (or left): stop generating
   if (useCli()) {
     const { system, pdf } = context(s);
-    const r = await cli.stream({ system: extra?.system || system, messages, model: settings().model || 'claude-opus-5', pdf, signal: ac.signal, onDelta: d => { text += d; res.write(d); } });
+    const { provider, model } = sel();
+    const r = await cli.stream({ provider, key: providerKey(provider), system: extra?.system || system, messages, model, pdf, signal: ac.signal, onDelta: d => { text += d; res.write(d); } });
     if (!r.ok && !ac.signal.aborted) res.write(`\n\n**Error:** ${r.message}`);
     res.end(); return text;
   }
   try {
     const { c, betas } = await client();
-    const stream = c.beta.messages.stream({ ...req(s, messages, extra), betas }, { signal: ac.signal });
+    const api = betas ? c.beta.messages : c.messages; // no beta namespace on a third-party endpoint
+    const stream = api.stream({ ...req(s, messages, extra), ...(betas ? { betas } : {}) }, { signal: ac.signal });
     for await (const ev of stream) if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') { text += ev.delta.text; res.write(ev.delta.text); }
     const final = await stream.finalMessage();
     if (final.stop_reason === 'refusal') res.write('\n\n*(Claude declined this request.)*');
@@ -136,13 +172,15 @@ async function json0(s, prompt, extra, opts = {}) {
   let text;
   if (useCli()) {
     const { system, pdf } = context(s);
-    const r = await cli.stream({ system, messages: [{ role: 'user', content: prompt }], model: settings().model || 'claude-opus-5', pdf, web: opts.web, signal: opts.signal, onDelta: opts.onDelta });
+    const { provider, model } = sel();
+    const r = await cli.stream({ provider, key: providerKey(provider), system, messages: [{ role: 'user', content: prompt }], model, pdf, web: opts.web, signal: opts.signal, onDelta: opts.onDelta });
     if (!r.ok) throw new Error(r.message); text = r.text;
   } else {
     const { c, betas } = await client();
-    const web = opts.web ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }] } : {};
-    const p = { ...req(s, [{ role: 'user', content: prompt }], { ...web, ...extra }), betas };
-    const r = opts.onDelta ? await c.beta.messages.stream(p, { signal: opts.signal }).on('text', opts.onDelta).finalMessage() : await c.beta.messages.create(p, { signal: opts.signal });
+    const api = betas ? c.beta.messages : c.messages;
+    const web = opts.web && betas ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }] } : {}; // Anthropic's own search tool
+    const p = { ...req(s, [{ role: 'user', content: prompt }], { ...web, ...extra }), ...(betas ? { betas } : {}) };
+    const r = opts.onDelta ? await api.stream(p, { signal: opts.signal }).on('text', opts.onDelta).finalMessage() : await api.create(p, { signal: opts.signal });
     text = r.content.filter(b => b.type === 'text').map(b => b.text).join('');
   }
   // tolerant: prose around the JSON, raw quotes inside strings. When even that fails the reply used to
