@@ -10,10 +10,27 @@ const { verify, pruneCache } = require('./linkcheck');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, 'dist')));
 
 // ponytail: CRAM_DATA set by main.js to Electron userData; web mode keeps data next to the code
 const DATA = process.env.CRAM_DATA || path.join(__dirname, 'data');
+// Access key: the phone reaches this server through `tailscale serve`, so every request needs the key,
+// passed once as ?key= (the link Settings shows) and kept as a cookie. No loopback exemption:
+// tailscale serve proxies from 127.0.0.1, so a loopback address proves nothing.
+let KEY;
+app.accessKey = () => KEY ||= (() => {
+  const f = path.join(DATA, 'access_key'); fs.mkdirSync(DATA, { recursive: true });
+  if (!fs.existsSync(f)) fs.writeFileSync(f, require('crypto').randomBytes(24).toString('base64url'), { mode: 0o600 });
+  return fs.readFileSync(f, 'utf8').trim();
+})();
+const OPEN = new Set(['/manifest.webmanifest', '/icon.png']); // the browser fetches these without cookies
+app.use((req, res, next) => {
+  const k = app.accessKey();
+  if (OPEN.has(req.path) || (req.headers.cookie || '').split(/; */).includes(`cram_key=${k}`)) return next();
+  if (req.query.key !== k) return res.status(401).send('Cram: open the phone link from Settings → Phone on your computer.');
+  res.cookie('cram_key', k, { httpOnly: true, sameSite: 'lax', maxAge: 10 * 365 * 864e5 });
+  next();
+});
+app.use(express.static(path.join(__dirname, 'dist')));
 // Per-profile paths. They are `let` because activate() re-points them when the profile switches;
 // every reader below resolves them at call time, so nothing needs to know a switch happened.
 const profiles = require('./profiles');
@@ -56,6 +73,11 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), '[clau
 const timed = async (what, s, fn) => { const t = Date.now(); log(`${what} start · ${useCli() ? 'cli' : auth.signedIn() ? 'oauth' : 'api'} · ${settings().model || 'claude-opus-5'} · pdf=${s.hasPdf ? 'yes' : 'no'}`); try { return await fn(); } finally { log(`${what} done in ${((Date.now() - t) / 1000).toFixed(1)}s`); } };
 
 // ---------- settings ----------
+// Settings → Phone: the port to put behind `tailscale serve`, and the key for the phone link
+app.get('/api/phone', (req, res) => require('child_process').execFile('tailscale', ['status', '--json'], { timeout: 5000 }, (e, out) => {
+  let host = null; try { host = JSON.parse(out).Self.DNSName.replace(/\.$/, ''); } catch {} // null: Tailscale missing or logged out
+  res.json({ port: app.port, key: app.accessKey(), host });
+}));
 app.get('/api/settings', (req, res) => {
   const s = settings();
   const { provider } = sel();
@@ -201,7 +223,7 @@ async function json0(s, prompt, extra, opts = {}) {
 app.get('/api/studies', (req, res) => res.json(fs.readdirSync(STUDIES).map(study).filter(s => !s.general).sort((a, b) => b.updatedAt - a.updatedAt)
   .map(({ id, title, subject, hasPdf, updatedAt, quizzes }) => ({ id, title, subject, hasPdf, updatedAt, quizzes: quizzes.length }))));
 app.get('/api/pick-pdf', async (req, res) => {
-  if (!app.pickPdf) return res.json({ error: 'Browsing for a file needs the desktop app.' });
+  if (!app.pickPdf || req.headers['x-forwarded-for']) return res.json({ error: 'Browsing for a file needs the desktop app.' }); // proxied = the phone: the dialog would open on the computer
   try { const file = await app.pickPdf(); res.json(file ? { file } : { canceled: true }); } catch (e) { res.json({ error: `File picker failed: ${e.message}` }); }
 });
 app.post('/api/studies', (req, res) => {
@@ -346,11 +368,13 @@ app.get('/api/studies/:id/outline', async (req, res, next) => {
 // starter helper questions for an empty chat, made once per study
 app.get('/api/studies/:id/starters', async (req, res) => {
   let s; try { s = study(path.basename(req.params.id)); } catch { return res.status(404).json({ error: 'no such study' }); }
-  if (s.starters?.length) return res.json(s.starters);
-  const toc = (s.outline?.items || []).filter(i => !i.depth).map(i => i.title).slice(0, 30).join('; ');
+  // older chapter plans and starters hold "List&lt;T&gt;" (their prompt was HTML-escaped): decode on the way out, and never feed it back in
+  const unent = t => String(t ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  if (s.starters?.length) return res.json(s.starters.map(unent));
+  const toc = (s.outline?.items || []).filter(i => !i.depth).map(i => unent(i.title)).slice(0, 30).join('; ');
   try {
     const r = await json(s, `Suggest 4 short questions (each under 12 words) a learner could ask first to get started with this ${s.hasPdf ? 'material' : 'subject'}: start from the basics and end with one that goes deeper.${toc ? ` Its chapters: ${toc}.` : ''} Write them in the language of the material. Respond with ONLY JSON: {"questions": [string]}`);
-    const s2 = study(s.id); s2.starters = (r.questions || []).map(q => String(q).trim()).filter(Boolean).slice(0, 4); save(s2); res.json(s2.starters);
+    const s2 = study(s.id); s2.starters = (r.questions || []).map(q => unent(q).trim()).filter(Boolean).slice(0, 4); save(s2); res.json(s2.starters);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/studies/:id/chat',(req, res) => { const s = study(req.params.id); s.chat = []; touch(s); res.json({ ok: true }); });
@@ -400,15 +424,17 @@ ${r.guide}
 Stay in character for every turn. Answer what the professional actually asks, volunteer what this person would naturally volunteer, and react to their explanations as this person would. Never grade, coach, hint, or tell them what to ask next.
 `;
 };
-const ivBase = iv => iv.mode === 'real' ? (rounds.resolve(iv).kind === rounds.CONSULT ? consultBase(iv) : realBase(iv)) :`You are running an endless oral-exam style interview on the study material. Difficulty: ${iv.difficulty}. ${langRule(iv.language)}${iv.focus ? ` Ask only about ${iv.focus.title}${iv.focus.from ? ` (PDF pages ${iv.focus.from}${iv.focus.to ? `-${iv.focus.to}` : ' onwards'})` : ''}.` : ''}
-${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1} (${t.type}): ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}`;
+const ivBase = iv => iv.mode === 'real' ? (rounds.resolve(iv).kind === rounds.CONSULT ? consultBase(iv) : realBase(iv)) :`You are a sharp, friendly interviewer holding a spoken, open-ended interview about the study material: a real conversation with the learner, not a written exam. Difficulty: ${iv.difficulty}. ${roles.addressRule(readJson(PROFILE, {}))} ${langRule(iv.language)}${iv.focus ? ` Ask only about ${iv.focus.title}${iv.focus.from ? ` (PDF pages ${iv.focus.from}${iv.focus.to ? `-${iv.focus.to}` : ' onwards'})` : ''}.` : ''}
+${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}`;
 // Two separate calls: grading is what the learner waits for; the next question is fetched behind the feedback.
 const hintNote = p => p.hint ? `\nBefore answering they asked for a hint and got: "${p.hint}". Take 2 points off the overall score for needing it, and mention that in the feedback.` : '';
 const gradePrompt = (iv, answer) => iv.mode === 'real' ? `${ivBase(iv)}Current question: ${iv.pending.q}${hintNote(iv.pending)}\nThe candidate answered: ${answer || '(no answer)'}\n\nGrade it the way a calibrated interviewer for a ${iv.seniority} ${iv.role} would. Feedback in 3-6 lines: what landed, what was missing or weak, and what a strong ${iv.seniority}-level answer would include. Score each rubric criterion 0-10: ${rounds.resolve(iv).rubric.join(', ')}. Respond with ONLY JSON: {"feedback": string, "score": number 0-10 overall, "rubric": {${rounds.resolve(iv).rubric.map(k => `"${k}": number`).join(', ')}}}`
   : `${ivBase(iv)}Current question (${iv.pending.type}): ${iv.pending.q}${hintNote(iv.pending)}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}\nCorrect choice: ${'ABCD'[iv.pending.answerIndex] || '?'}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Respond with ONLY JSON: {"feedback": string, "correct": boolean, "score": number}`;
+// how an interviewer talks, the same in a real round and in an interview on study material, so both sound like a person
+const TALK = `Talk as in a live conversation with a real person. You may open with a short reaction to their last answer that never reveals whether it was right, but make it human and specific: pick up something they actually said (a word, an example, a tool they named), or bridge naturally into the next topic, or skip the reaction and just ask. Vary it every time: look at how your earlier questions in the transcript began and never start the same way twice, and do not fall back on stock fillers (تمام / واخد بالي / حلو / Got it / Great) as a habit. No grading, no hints, no multiple choice.`;
 const followUps = iv => { let n = 0; for (let i = iv.turns.length - 1; i >= 0 && iv.turns[i].followUp; i--) n++; return n; };
-const nextPrompt = iv => iv.mode === 'real' ? `${ivBase(iv)}${iv.turns.length ? `Ask your next question like a real interviewer. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}. Otherwise move to a new topic or the next stage. Never repeat a question.` : 'Open the round with your first question (a one-line greeting before it is fine).'} Talk as in a live conversation with a real person. You may open with a short reaction to their last answer that never reveals whether it was right, but make it human and specific: pick up something they actually said (a word, an example, a tool they named), or bridge naturally into the next topic, or skip the reaction and just ask. Vary it every time: look at how your earlier questions in the transcript began and never start the same way twice, and do not fall back on stock fillers (تمام / واخد بالي / حلو / Got it / Great) as a habit. No grading, no hints, no multiple choice. Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`
-  : `${ivBase(iv)}Write the next question, building on the transcript: go deeper where the learner is strong, revisit gaps, never repeat a question. Speak to the learner as "you" and just ask the question: no preamble, no commentary on their previous answers, no explanation of why you chose it. Type "choice" (4 choices, exactly one correct) or "text" (short open answer, explain-it-to-me style); alternate the two types${iv.turns.length ? ` (last was ${iv.turns[iv.turns.length - 1].type})` : ''}. Respond with ONLY JSON: {"q": string, "type": "choice"|"text", "choices": [4 strings]|null, "answer": correct index|null}`;
+const nextPrompt = iv => iv.mode === 'real' ? `${ivBase(iv)}${iv.turns.length ? `Ask your next question like a real interviewer. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}. Otherwise move to a new topic or the next stage. Never repeat a question.` : 'Open the round with your first question (a one-line greeting before it is fine).'} ${TALK} Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`
+  : `${ivBase(iv)}${iv.turns.length ? `Ask your next question, building on the transcript: go deeper where the learner is strong, come back to gaps, never repeat a question. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}.` : 'Open the interview with your first question (a one-line greeting before it is fine).'} Ask open questions the learner answers in their own words, out loud. ${TALK} Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`;
 app.post('/api/studies/:id/interviews', async (req, res) => {
   const s = study(req.params.id); const { difficulty = 'medium', language = 'English', round, role, seniority = 'mid' } = req.body;
   const iv = { id: Date.now().toString(36), at: Date.now(), difficulty: String(difficulty).slice(0, 20), language: String(language).slice(0, 30), status: 'open', elapsed: 0, turns: [], pending: null };
@@ -645,4 +671,4 @@ require('./features')(app, { study, save, touch, json, context, DATA, NO_STUDY, 
   profileDir: () => PROFILE_DIR, studiesDir: () => STUDIES, profileFile: () => PROFILE, coachFile: () => COACH });
 
 module.exports = app;
-if (require.main === module) app.listen(3000, '127.0.0.1', () => console.log('http://localhost:3000'));
+if (require.main === module) { app.port = 3000; app.listen(3000, '127.0.0.1', () => console.log(`http://localhost:3000/?key=${app.accessKey()}`)); }

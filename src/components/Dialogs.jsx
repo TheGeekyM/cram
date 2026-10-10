@@ -17,7 +17,7 @@ export function NewDialog({ mode, prefill, onClose, onCreated }) {
   }
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
-      <div className="island w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+      <div className={`island w-full ${mode === 'pdf' ? 'max-w-md' : 'max-w-xl'} p-5`} onClick={e => e.stopPropagation()}>
         <div className="text-sm font-semibold text-white mb-3">{mode === 'pdf' ? 'New study from a PDF' : 'New study from a subject'}</div>
         <label className="text-[11px] uppercase tracking-wider text-dim">Title</label>
         <input autoFocus className="input mt-1 mb-3" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Operating Systems, Chapter 4" onKeyDown={e => e.key === 'Enter' && create()} />
@@ -25,8 +25,12 @@ export function NewDialog({ mode, prefill, onClose, onCreated }) {
           <label className="text-[11px] uppercase tracking-wider text-dim">PDF file</label>
           <div className="flex gap-2 mt-1 mb-3"><input readOnly className="input flex-1 font-mono text-xs" value={pdf.split(/[\\/]/).pop()} title={pdf} placeholder="No file chosen" /><button className="btn btn-ghost" onClick={pick}>Browse…</button></div>
         </> : <>
-          <label className="text-[11px] uppercase tracking-wider text-dim">Subject / scope</label>
-          <input className="input mt-1 mb-3" value={subject} onChange={e => setSubject(e.target.value)} placeholder="What to study, e.g. process scheduling algorithms" onKeyDown={e => e.key === 'Enter' && create()} />
+          <label className="text-[11px] uppercase tracking-wider text-dim">What to study</label>
+          {/* multi-line: a pasted outline keeps its lines, and the chapters follow it in order (features.js /outline) */}
+          <textarea rows={6} dir="auto" className="input mt-1 resize-y min-h-[88px] max-h-[45vh] text-[13px] leading-relaxed" value={subject} onChange={e => setSubject(e.target.value)}
+            placeholder={'A line, e.g. process scheduling algorithms\n\nor paste your own outline: phases, weeks, topics…\nthe chapters will follow it, in your order.'}
+            onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && create()} />
+          <p className="text-[11px] text-dim mt-1 mb-3">Paste a syllabus or a list of topics and each part becomes a chapter, in the same order. Ctrl+Enter creates.</p>
         </>}
         <label className="text-[11px] uppercase tracking-wider text-dim">Your level here</label>
         <div className="flex gap-0.5 bg-app border border-border rounded-lg p-0.5 mt-1 mb-1">

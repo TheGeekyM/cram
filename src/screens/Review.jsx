@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from '../components/Markdown.jsx'
+import { dirOf } from '../voice.js'
 import { api } from '../api.js'
 import Wait from '../components/Wait.jsx'
 import { ask } from '../components/Confirm.jsx'
@@ -101,14 +102,14 @@ function Session({ cards: initial, steps, onExit, onChanged, bar }) {
       <div className="flex-1 min-h-0 overflow-y-auto pt-2.5">
         <div key={`${c.id}:${i}`} className="island p-6 max-w-3xl mx-auto flex flex-col gap-4" style={{ animation: 'rv-in .3s ease-out both' }}>
           <div className="flex items-center gap-2 text-xs"><span className={`badge py-0 ${SRC[c.source]?.[1] || ''}`}>{SRC[c.source]?.[0] || c.source}</span><span className="text-dim truncate">{c.studyTitle}</span>{c.lapses > 0 && <span className="ml-auto text-error">missed {c.lapses}×</span>}</div>
-          <div dir="auto" className="text-lg font-medium text-white leading-relaxed">{c.q}</div>
+          <div dir={dirOf(c.q)} className="text-lg font-medium text-white leading-relaxed">{c.q}</div>
           {c.choices?.length ? (
             <div className="flex flex-col gap-1.5">{c.choices.map((ch, j) => {
               const cls = !shown ? 'border-border hover:border-accent/50' : j === c.answerIndex ? 'border-success bg-success/10' : j === pick ? 'border-error bg-error/10' : 'border-border opacity-60'
-              return <button key={j} dir="auto" disabled={shown} onClick={() => { setPick(j); setShown(true) }} className={`text-left text-sm px-3 py-2.5 rounded-lg border bg-app flex gap-2.5 transition-colors ${cls}`}><span className="text-dim font-mono text-xs pt-0.5">{'ABCD'[j]}</span><span>{ch}</span></button>
+              return <button key={j} dir={dirOf(ch)} disabled={shown} onClick={() => { setPick(j); setShown(true) }} className={`text-start text-sm px-3 py-2.5 rounded-lg border bg-app flex gap-2.5 transition-colors ${cls}`}><span className="text-dim font-mono text-xs pt-0.5">{'ABCD'[j]}</span><span>{ch}</span></button>
             })}</div>
           ) : !shown && <button onClick={() => setShown(true)} className="btn btn-primary self-start inline-flex items-center gap-2">Show answer<span className="text-[10px] font-mono opacity-70 border border-current/30 rounded px-1">Space</span></button>}
-          {shown && c.a && <div dir="auto" className="text-sm text-gray-200 border-l-2 border-accent pl-3 kb-rich" style={{ animation: 'rv-in .25s ease-out both' }}><Markdown text={c.a} /></div>}
+          {shown && c.a && <div dir={dirOf(c.a)} className="text-sm text-gray-200 border-l-2 border-accent pl-3 kb-rich" style={{ animation: 'rv-in .25s ease-out both' }}><Markdown text={c.a} /></div>}
           {shown && <div className="flex flex-col gap-2 pt-1">
             <div className="text-[11px] text-dim">How well did you know it?</div>
             <div className="grid grid-cols-4 gap-2">{GRADES.map(([g, l, cls], k) => <button key={g} disabled={busy} onClick={() => grade(g)} className={`${cls} justify-center py-2.5 flex-col !gap-0.5`}><span className="text-sm font-semibold">{l}</span><span className="text-[10px] opacity-80 font-mono">{steps[nextStep(step, g, steps)]}d · {k + 1}</span></button>)}</div>
@@ -166,7 +167,7 @@ export default function Review({ studies = [], onChanged, scope = '', bar = 'rev
             {cards.map(c => (
               <div key={c.id} className="group flex items-center gap-3 px-4 py-2.5">
                 <span className={`w-2 h-2 rounded-full flex-shrink-0 ${c.dueAt <= now ? 'bg-accent animate-pulse' : (c.step ?? -1) >= 3 ? 'bg-success' : 'bg-warning'}`} />
-                <div className="min-w-0 flex-1"><div dir="auto" className="text-sm text-gray-100 truncate">{c.q}</div><div className="text-[11px] text-dim truncate">{c.studyTitle}</div></div>
+                <div className="min-w-0 flex-1"><div dir={dirOf(c.q)} className="text-sm text-gray-100 truncate">{c.q}</div><div className="text-[11px] text-dim truncate">{c.studyTitle}</div></div>
                 <span className={`badge py-0 hidden md:inline-flex ${SRC[c.source]?.[1] || ''}`}>{SRC[c.source]?.[0] || c.source}</span>
                 {c.lapses > 0 && <span className="text-[11px] text-error whitespace-nowrap">{c.lapses} lapse{c.lapses === 1 ? '' : 's'}</span>}
                 <span className={`text-[11px] whitespace-nowrap w-20 text-right ${c.dueAt <= now ? 'text-accent' : 'text-dim'}`}>{rel(c.dueAt)}</span>

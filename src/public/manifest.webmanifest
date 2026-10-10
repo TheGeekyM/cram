@@ -1,0 +1,9 @@
+{
+  "name": "Cram",
+  "short_name": "Cram",
+  "description": "Study desk: ask, quiz, get interviewed. Runs on your computer; the phone is its screen.",
+  "display": "standalone",
+  "background_color": "#121316",
+  "theme_color": "#121316",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}

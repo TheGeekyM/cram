@@ -339,6 +339,7 @@
 /* Rich text from ADO/Jira work items — tables, lists, formatting (Tailwind resets these) */
 .kb-rich p { margin: 0 0 0.5rem; }
 .kb-rich p:last-child { margin-bottom: 0; }
+.kb-rich p:has(+ p.br) { margin-bottom: 0; } /* a line break Markdown.jsx split into its own <p> */
 .kb-rich strong, .kb-rich b { color: rgb(var(--c-gray-100)); font-weight: 600; }
 .kb-rich em, .kb-rich i { font-style: italic; }
 .kb-rich a { color: rgb(var(--c-accent)); text-decoration: underline; }

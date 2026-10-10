@@ -7,6 +7,13 @@ import { Centered, useSessions, GENERAL, PageBar, Grid, Tile, Stats } from '../c
 import { speak, stopSpeech, speechProgress, useMic, dirOf } from '../voice.js'
 import { JobPrep, StoryBank } from './Prep.jsx'
 
+// Generation outlives the view that asked for it. Switching tab or study tool unmounts this screen, but the
+// server keeps generating, so requests in flight are kept here (per interview, or per study for a new one).
+// Coming back picks the same request up again, instead of forgetting it or asking a second time.
+const inflight = new Map() // key -> { p, ...extra }
+const lastOpen = new Map() // scope -> the interview that was open, so coming back lands inside it, not on the list
+const track = (key, p, extra) => { const e = { p, ...extra }, done = () => inflight.get(key) === e && inflight.delete(key); inflight.set(key, e); p.then(done, done); return p }
+
 const Ico = ({ d, s = 14 }) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 const MIC = <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>
 const Spin = () => <span className="inline-block w-3.5 h-3.5 border-2 border-border border-t-accent rounded-full animate-spin align-middle" />
@@ -295,7 +302,7 @@ function Statistics({ iv }) {
         <div>
           <div className="text-[10px] uppercase tracking-wider text-dim mb-2">Review these first</div>
           <div className="flex flex-col gap-1.5">{st.weakest.map(({ t, i }) => (
-            <button key={i} onClick={() => jump(i)} dir="auto" className="text-left flex items-center gap-3 px-3 py-2 rounded-lg bg-app border border-border hover:border-accent/50 transition-colors">
+            <button key={i} onClick={() => jump(i)} dir={dirOf(t.q)} className="text-start flex items-center gap-3 px-3 py-2 rounded-lg bg-app border border-border hover:border-accent/50 transition-colors">
               <span className={`font-mono text-sm font-semibold w-10 flex-shrink-0 ${tone(t.score)}`}>{t.score}/10</span>
               <span className="text-sm text-gray-200 truncate">{t.q}</span><span className="ml-auto text-[11px] text-dim flex-shrink-0">Q{i + 1}</span>
             </button>))}
@@ -326,16 +333,19 @@ function Resource({ r }) {
   )
 }
 function Coaching({ rep, url, onReport, stale = '', intro = 'Tips on how to improve, plus YouTube videos, playlists, GitHub repos and quizzes picked for your weak spots. Every link is checked before it is shown.' }) {
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState(''); const ctrl = useRef(null); const [secs, setSecs] = useState(0)
-  useEffect(() => { if (!busy) return; setSecs(0); const t = setInterval(() => setSecs(x => x + 1), 1000); return () => clearInterval(t) }, [busy])
-  useEffect(() => () => ctrl.current?.abort(), [])
-  const run = async () => {
-    setBusy(true); setErr(''); ctrl.current = new AbortController()
-    try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: ctrl.current.signal }).then(x => x.json().catch(() => ({ error: `${x.status}: the app's server is not running the latest version. Restart Cram.` })))
-      if (r.error) setErr(r.error); else onReport(r)
-    } catch (e) { if (e.name !== 'AbortError') setErr(e.message) }
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState(''); const ctrl = useRef(null); const [secs, setSecs] = useState(0); const at = useRef(0)
+  useEffect(() => { if (!busy) return; const tick = () => setSecs(Math.round((Date.now() - at.current) / 1000)); tick(); const t = setInterval(tick, 1000); return () => clearInterval(t) }, [busy])
+  // leaving does not abort (only Stop does): the report keeps being written and this picks it up on return
+  const attach = async e => {
+    setBusy(true); setErr(''); ctrl.current = e.ctrl; at.current = e.at
+    try { const r = await e.p; if (r.error) setErr(r.error); else onReport(r) } catch (x) { if (x.name !== 'AbortError') setErr(x.message) }
     setBusy(false); ctrl.current = null
+  }
+  useEffect(() => { const e = inflight.get(url); if (e) attach(e) }, [url]) // eslint-disable-line
+  const run = () => {
+    const c = new AbortController()
+    track(url, fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: c.signal }).then(x => x.json().catch(() => ({ error: `${x.status}: the app's server is not running the latest version. Restart Cram.` }))), { ctrl: c, at: Date.now() })
+    attach(inflight.get(url))
   }
   const groups = rep ? Object.keys(KINDS).map(k => [k, rep.resources.filter(r => r.kind === k)]).filter(([, L]) => L.length) : []
   if (busy) return (
@@ -603,7 +613,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
   const [sent, setSent] = useState(null) // the answer on its way: shown in the chat while it is graded
   const [qa, setQa] = useState(false) // the Q&A note picker
   const talk = useRef({ secs: 0, pauses: 0, lastEnd: 0 }) // how this answer was spoken: seconds of speech and long pauses between utterances
-  const nextReq = useRef(null); const end = useRef(); const box = useRef()
+  const end = useRef(); const box = useRef()
   const base = `/api/studies/${study.id}/interviews/${iv.id}`; const open = iv.status === 'open'; const { n, ok, avg } = stats(iv); const q = iv.pending
   useEffect(() => { if (!open) return; const t = setInterval(() => { if (!document.hidden) setElapsed(e => e + 1) }, 1000); return () => clearInterval(t) }, [open])
   useEffect(() => { if (elapsed && elapsed % 10 === 0) api.post(base, { elapsed }) }, [elapsed]) // eslint-disable-line
@@ -634,7 +644,7 @@ function Session({ study, iv, setIv, onBack, bar }) {
 
   // a new question: speak it while the text streams in, then open the mic
   useEffect(() => {
-    if (!open || !q || preparing) return
+    if (!open || !q || preparing || inflight.has(`ans:${iv.id}`)) return
     let live = true; setDraft(''); barged.current = false; talk.current = { secs: 0, pauses: 0, lastEnd: 0 }
     const reveal = k => live && setShown({ q: q.q, n: k })
     const spoken = [q.q, ...(q.choices || []).map((c, j) => `${'ABCD'[j]}. ${c}`)].join('. ')
@@ -662,18 +672,25 @@ function Session({ study, iv, setIv, onBack, bar }) {
     mic.stop(); stopSpeech(); setBusy(true); setErr(''); setSent(answer); setDraft('')
     const k = talk.current, words = answer.split(/\s+/).filter(Boolean).length
     const delivery = k.secs >= 2 && picked == null ? { secs: k.secs, words, wpm: words / (k.secs / 60), fillers: (answer.match(FILLERS) || []).length, longPauses: k.pauses } : null
-    const r = await api.post(`${base}/answer`, { answer, picked, secs: elapsed - qStart, elapsed, delivery })
+    const r = await track(`ans:${iv.id}`, api.post(`${base}/answer`, { answer, picked, secs: elapsed - qStart, elapsed, delivery }), { answer })
     setBusy(false); setSent(null)
     if (r.error) { setErr(r.error); if (picked == null) setDraft(answer); return } // grading failed: the answer goes back in the box
     setIv({ ...r, elapsed })
-    nextReq.current = api.post(`${base}/next`, {}); next()
+    next()
   }
+  // one /next per interview at a time: a view that comes back while it is running waits on the same request
   const next = async () => {
     setPreparing(true)
-    const r = await (nextReq.current || api.post(`${base}/next`, {})); nextReq.current = null; setPreparing(false)
+    const k = `next:${iv.id}`, r = await (inflight.get(k)?.p || track(k, api.post(`${base}/next`, {}))); setPreparing(false)
     if (r.error) return setErr(r.error)
     setIv({ ...r, elapsed: ref.current.elapsed })
   }
+  // came back while an answer was still being graded: show it as sent, then carry on as submit would have
+  useEffect(() => {
+    const e = inflight.get(`ans:${iv.id}`); if (!e) return
+    setBusy(true); setSent(e.answer)
+    e.p.then(r => { setBusy(false); setSent(null); if (r.error) return setErr(r.error); setIv({ ...r, elapsed: ref.current.elapsed }); next() })
+  }, []) // eslint-disable-line
   // a resumed session with no pending question (graded, then closed) needs one
   useEffect(() => { if (open && !iv.pending && !preparing) next() }, [open]) // eslint-disable-line
   useEffect(() => { end.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) }, [n, shown?.n, preparing, busy, draft])
@@ -791,15 +808,23 @@ function Progress({ list }) {
 // scope: GENERAL = the generic page (real interview rounds); a study id = inside that study's workspace (exam on its material)
 export default function Interview({ studies, scope = GENERAL, bar = 'interview', onOpenTool, openId, active: shown, profile }) {
   const { list, update: setIv, add, remove } = useSessions('interviews', studies, scope)
-  const [sel, setSel] = useState(openId || null) // null = cards, 'new' = hero, 'prep' | 'stories', id = session
+  const [sel, setSel] = useState(openId || lastOpen.get(scope) || null) // null = cards, 'new' = hero, 'prep' | 'stories', id = session
+  useEffect(() => { lastOpen.set(scope, sel === 'new' ? null : sel) }, [sel, scope])
   // the pane stays mounted while its tab is open: leaving the page drops an unstarted "new" form, so coming back shows the list
   useEffect(() => { if (shown === false) setSel(s => s === 'new' ? null : s) }, [shown])
   const [busy, setBusy] = useState(false)
   const active = list?.find(i => i.id === sel)
   const start = async opts => {
-    setBusy(true); const iv = await api.post(`/api/studies/${scope}/interviews`, opts); setBusy(false)
+    setBusy(true); const iv = await track(`start:${scope}`, api.post(`/api/studies/${scope}/interviews`, opts)); setBusy(false)
     if (iv.error) return alert(iv.error); add(iv, scope); setSel(iv.id)
   }
+  // an interview that was still starting when you left: show it starting, then open it (once the list is loaded, so it is not lost)
+  const loaded = !!list
+  useEffect(() => {
+    const e = loaded && inflight.get(`start:${scope}`); if (!e) return
+    setBusy(true); setSel(s => typeof s === 'string' && s !== 'new' && s !== 'prep' && s !== 'stories' ? s : 'new')
+    e.p.then(iv => { setBusy(false); if (iv.error) return; add(iv, scope); setSel(iv.id) })
+  }, [loaded, scope]) // eslint-disable-line
   const del = async iv => {
     if (!await ask({ title: `Delete this ${real(iv) ? (iv.roundLabel || roundName(iv.round)).toLowerCase() : iv.difficulty} interview?`, body: 'Its questions, answers and score are removed.', ok: 'Delete' })) return
     await api.del(`/api/studies/${iv.studyId}/interviews/${iv.id}`); remove(iv.id); if (sel === iv.id) setSel(null)

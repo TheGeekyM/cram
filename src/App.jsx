@@ -5,6 +5,7 @@ import Interview from './screens/Interview.jsx'
 import CodeArena from './screens/CodeArena.jsx'
 import Review from './screens/Review.jsx'
 import Plan from './screens/Plan.jsx'
+import Roadmap from './screens/Roadmap.jsx'
 import NotesScreen from './screens/NotesScreen.jsx'
 import Blog from './screens/Blog.jsx'
 import NotificationBell from './components/NotificationBell.jsx'
@@ -25,6 +26,7 @@ const Ico = ({ d, s = 15 }) => <svg width={s} height={s} viewBox="0 0 24 24" fil
 export const I = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
   plan: <><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></>,
+  roadmap: <><path d="M4 22V4"/><path d="M20 22V4"/><path d="M12 4v2"/><path d="M12 10v3"/><path d="M12 17v3"/></>,
   book: <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>,
   ask: <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>,
   interview: <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>,
@@ -37,20 +39,20 @@ export const I = {
   pdf: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></>,
   new: <><path d="M12 5v14"/><path d="M5 12h14"/></>,
 }
-const PAGES = [['dashboard', 'Dashboard', I.grid], ['plan', 'Plan', I.plan], ['studies', 'Studies', I.book]]
+const PAGES = [['dashboard', 'Dashboard', I.grid], ['plan', 'Plan', I.plan], ['roadmap', 'Roadmap', I.roadmap], ['studies', 'Studies', I.book]]
 const TOOLS = [['interview', 'Interview', I.interview], ['code', 'Code', I.code], ['review', 'Review', I.review], ['notes', 'Notes', I.notes], ['blog', 'Blog', I.blog]]
 const ENTRIES = [...PAGES, ...TOOLS]
 const HOME = ['dashboard', 'studies'] // drawn by HomeScreen; every other entry has its own pane
 const isPane = p => p === 'study' || (ENTRIES.some(e => e[0] === p) && !HOME.includes(p))
 const WS_OF = { source: 'source', ask: 'chat', study: 'chat', chat: 'chat', interview: 'interview', code: 'code', notes: 'notes', review: 'review', coach: 'coach' } // tools a study link opens inside the workspace
 const SLOTS = ['code', 'interview', 'review', 'study', 'blog'] // header slots a PageBar can fill
-const GLOBAL = { plan: Plan, interview: Interview, code: CodeArena, review: Review, blog: Blog } // panes not bound to one study
+const GLOBAL = { plan: Plan, roadmap: Roadmap, interview: Interview, code: CodeArena, review: Review, blog: Blog } // panes not bound to one study
 
 // breadcrumb pieces for the app header: one separator, one style for the current page and for links back
-const Crumb = {
-  Sep: () => <span className="text-dim text-sm px-0.5 select-none" aria-hidden>›</span>,
-  here: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm font-semibold text-white min-w-0',
-  link: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-sm text-dim hover:text-white hover:bg-white/5 transition-colors',
+const Crumb = { // styled like aidle's top bar: monospace, a faint ›, the current page brighter than the links before it
+  Sep: () => <span className="text-dim/40 text-sm px-0.5 select-none flex-shrink-0" aria-hidden>›</span>,
+  here: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[13px] font-mono text-gray-100 min-w-0',
+  link: 'inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[13px] font-mono text-dim hover:text-white hover:bg-white/5 transition-colors',
 }
 // the account cluster, at the right end of the window's top bar on every page, in aidle's order: bell, gear, account
 const Account = ({ profile, onProfile, onSettings, onProfiles }) => <>
@@ -118,10 +120,11 @@ export default function App() {
   // every way of opening a page lands here: it focuses that page's tab, or opens one
   const go = p => { setPage(p); if (p !== 'study') setTabs(ts => ts.some(t => t.page === p) ? ts : [...ts, { page: p }]); if (!isPane(p)) reload() }
   // open any entry; with a real study id, the study's workspace on that tool (General practice sessions stay on the generic pages)
-  const openTool = async (sid, tool) => {
+  const [ivReq, setIvReq] = useState(null) // { id, n }: open this interview inside the study's workspace
+  const openTool = async (sid, tool, ivId) => {
     if (sid && sid !== '_general' && WS_OF[tool] && await load(sid)) {
       setTabs(ts => ts.some(t => t.sid === sid) ? ts : [...ts, { page: 'study', sid, tool: WS_OF[tool] }])
-      setCurrent(sid); setWsTool(WS_OF[tool]); return go('study')
+      setCurrent(sid); setWsTool(WS_OF[tool]); if (ivId) setIvReq({ id: ivId, n: Date.now() }); return go('study')
     }
     go(ENTRIES.some(e => e[0] === tool) ? tool : WS_OF[tool] ? 'studies' : 'dashboard') // a study tool with no study: pick one from Studies
   }
@@ -185,9 +188,38 @@ export default function App() {
       {/* one bar across the very top of the window — the app on the left, the account on the right.
           It sits above the sidebar and the page, so the bell and the gear are never buried in a page header. */}
       <header className="island flex items-center gap-1 px-2.5 h-12 flex-shrink-0">
-        <div className="w-7 h-7 rounded-lg grid place-items-center text-sm font-bold text-app flex-shrink-0" style={{ background: 'rgb(var(--c-accent))' }}>C</div>
-        <span className="text-sm font-semibold text-white tracking-wide ms-1">CRAM</span>
-        <div className="flex-1" />
+        {!home && <><button onClick={() => go('dashboard')} title="Home" aria-label="Home" className="w-7 h-7 rounded-md text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0"><span className="block -translate-y-px" aria-hidden><Ico d={<><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></>} /></span></button>
+          <span className="w-px h-4 bg-border mx-1 flex-shrink-0" /></>}
+        <button onClick={() => go('dashboard')} title="Cram" className="flex items-center gap-1.5 px-1 flex-shrink-0 select-none">
+          <span className="w-5 h-5 rounded-md grid place-items-center text-[11px] font-bold leading-none text-app" style={{ background: 'rgb(var(--c-accent))' }}>C</span>
+          <span className="text-sm font-mono font-semibold text-white tracking-wide">cram</span>
+        </button>
+        {/* the breadcrumb and the page's own controls (bar-* slots, always mounted so pages can portal into them) */}
+        <div className={`contents ${home ? '[&>*]:hidden' : ''}`}>
+          <Crumb.Sep />
+          {page === 'study' ? <>
+            <button onClick={() => go('studies')} className={Crumb.link}><span className="text-dim"><Ico d={I.book} /></span>Studies</button>
+            <Crumb.Sep />
+            {wsTool === 'chat'
+              ? <span className={`${Crumb.here} max-w-[320px]`} dir="auto"><span className="truncate">{study?.title || 'Loading…'}</span></span>
+              : <button onClick={() => setWsTool('chat')} title="Back to the chat" className={`${Crumb.link} max-w-[260px] min-w-0`} dir="auto"><span className="truncate">{study?.title}</span></button>}
+            {wsTool !== 'chat' && <><Crumb.Sep />{slotFilled.study
+              ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: 'study' }))} title={`Back to ${wsLabel}`} className={Crumb.link}>{wsLabel}</button>
+              : <span className={Crumb.here}>{wsLabel}</span>}</>}
+            {slotFilled.study && <Crumb.Sep />}
+          </> : <>
+            <span className="app-title flex items-center">
+              {slotFilled[page]
+                ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: page }))} title={`Back to ${ENTRIES.find(t => t[0] === page)?.[1]}`} className={Crumb.link}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</button>
+                : <span className={Crumb.here}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</span>}
+            </span>
+            {slotFilled[page] && <Crumb.Sep />}
+          </>}
+          {SLOTS.map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
+          {!SLOTS.includes(page) && <div className="flex-1" />}
+        </div>
+        {home && <div className="flex-1" />}
+        {!home && slotFilled[page === 'study' ? 'study' : page] && <span className="w-px h-4 bg-border mx-1.5 flex-shrink-0" />}{/* like aidle: the page's controls, a divider, then the app's own */}
         <Account profile={profile} onProfile={() => setEditProfile(true)} onSettings={() => setSettingsOpen(true)} onProfiles={() => setShowProfiles(true)} />
       </header>
       <div className="flex-1 min-h-0 flex gap-2.5">
@@ -209,32 +241,6 @@ export default function App() {
           })}
         </div>
         {stale && <div className="px-4 py-2 text-xs bg-error/15 text-error border-b border-error/30 flex items-center gap-2"><b>Outdated server.</b><span className="flex-1 truncate">{stale}</span><button onClick={() => setStale('')} className="opacity-70 hover:opacity-100">✕</button></div>}
-        {( // always mounted so the per-tool bar slots survive page switches; hidden where no header belongs
-          <div className={`app-bar min-h-11 py-1 flex items-center gap-1 px-3 border-b border-border bg-panel flex-shrink-0 ${home ? 'hidden' : ''}`}>
-            <button onClick={() => go('dashboard')} title="Home" aria-label="Home" className="w-7 h-7 rounded-md text-dim hover:text-white hover:bg-white/5 grid place-items-center flex-shrink-0"><span className="block -translate-y-px" aria-hidden><Ico d={<><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></>} /></span></button>{/* lifted 1px: a house reads low next to text */}
-            <Crumb.Sep />
-            {page === 'study' ? <>
-              <button onClick={() => go('studies')} className={Crumb.link}><span className="text-dim"><Ico d={I.book} /></span>Studies</button>
-              <Crumb.Sep />
-              {wsTool === 'chat'
-                ? <span className={`${Crumb.here} max-w-[320px]`} dir="auto"><span className="truncate">{study?.title || 'Loading…'}</span></span>
-                : <button onClick={() => setWsTool('chat')} title="Back to the chat" className={`${Crumb.link} max-w-[260px] min-w-0`} dir="auto"><span className="truncate">{study?.title}</span></button>}
-              {wsTool !== 'chat' && <><Crumb.Sep />{slotFilled.study
-                ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: 'study' }))} title={`Back to ${wsLabel}`} className={Crumb.link}>{wsLabel}</button>
-                : <span className={Crumb.here}>{wsLabel}</span>}</>}
-              {slotFilled.study && <Crumb.Sep />}
-            </> : <>
-              <span className="app-title flex items-center">
-                {slotFilled[page]
-                  ? <button onClick={() => window.dispatchEvent(new CustomEvent('cram:back', { detail: page }))} title={`Back to ${ENTRIES.find(t => t[0] === page)?.[1]}`} className={Crumb.link}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</button>
-                  : <span className={Crumb.here}><span className="text-dim"><Ico d={I[page] || I.grid} /></span>{ENTRIES.find(t => t[0] === page)?.[1]}</span>}
-              </span>
-              {slotFilled[page] && <Crumb.Sep />}
-            </>}
-            {SLOTS.map(t => <div key={t} id={`bar-${t}`} className={`bar-slot flex-1 min-w-0 ${page === t ? 'flex' : 'hidden'}`} />)}
-            {!SLOTS.includes(page) && <div className="flex-1" />}
-          </div>
-        )}
         <div className="flex-1 min-h-0 relative">
           <div className={`absolute inset-0 ${pane ? 'hidden' : ''}`}>
             <HomeScreen section={HOME.includes(page) ? page : 'dashboard'} studies={studies} settings={settings} profile={profile} onEditProfile={() => setEditProfile(true)}
@@ -243,7 +249,7 @@ export default function App() {
           {page === 'study' && !study && <div className="absolute inset-0 grid place-items-center text-xs text-dim">{current ? 'Loading…' : 'Pick a study from Studies.'}</div>}
           {Object.entries(GLOBAL).map(([t, Tool]) => (tabs.some(x => x.page === t) || t === page) && <div key={t} className={`absolute inset-0 ${page === t ? '' : 'hidden'}`}><Tool studies={studies} onChanged={refreshDue} onOpenTool={openTool} active={page === t} openId={t === 'blog' ? blogOpen : undefined} profile={profile} /></div>)}
           {(tabs.some(x => x.page === 'notes') || page === 'notes') &&<div className={`absolute inset-0 ${page === 'notes' ? '' : 'hidden'}`}><NotesScreen project={{ id: 'notes', name: 'Notes' }} /></div>}
-          {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} profile={profile} /></div>}
+          {study && page === 'study' && <div key={study.id} className="absolute inset-0"><StudyWorkspace study={study} setStudy={u => setStudy(study.id, u)} tool={wsTool} setTool={setWsTool} onChanged={refreshDue} profile={profile} openInterview={ivReq} onInterviewOpened={() => setIvReq(null)} /></div>}
         </div>
       </div>
       </div>

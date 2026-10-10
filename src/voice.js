@@ -3,8 +3,9 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 // Voice for the interview: the interviewer speaks (Edge neural voices via /api/speak) and the learner answers by mic
 // (Silero VAD finds where speech starts and stops, /api/transcribe turns each utterance into text with local Whisper).
 
-// direction of a mixed text: Arabic wins when it has more Arabic letters than Latin ones ("ما هو Big O؟" is RTL)
-export const isRtl = t => { const s = String(t || ''); return (s.match(/[؀-ۿ]/g) || []).length > (s.match(/[A-Za-z]/g) || []).length }
+// direction of a mixed text: any Arabic makes it RTL. A technical Arabic line ("لو 5000 request جم بعد الـ TTL")
+// can hold more Latin letters than Arabic ones, and dir="auto" only reads the first letter.
+export const isRtl = t => /[؀-ۿ]/.test(String(t || ''))
 export const dirOf = t => isRtl(t) ? 'rtl' : 'ltr'
 
 // one shared player; `token` drops audio that arrives after a newer request or a stop

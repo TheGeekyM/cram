@@ -79,7 +79,7 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
           and wrapping cards in another box just boxes a box */}
       <aside className={`flex flex-col min-h-0 ${pdf ? 'island w-80 flex-shrink-0' : 'flex-1 max-w-4xl mx-auto w-full'}`}>
         <div className={`flex items-center gap-2 ${pdf ? 'panel-header' : 'px-1 pb-2 text-[10px] uppercase tracking-[0.18em] text-dim'}`}>Chapters{items.length > 0 && <span className="normal-case tracking-normal font-normal text-dim">· {chapters.length}</span>}
-          {o && !o.error && <button onClick={() => load(true)} className="ml-auto normal-case tracking-normal font-normal text-[11px] text-dim hover:text-white" title="Read the chapters again">Refresh</button>}</div>
+          {o && !o.error && o.from !== 'roadmap' && <button onClick={() => load(true)} className="ml-auto normal-case tracking-normal font-normal text-[11px] text-dim hover:text-white" title="Read the chapters again">Refresh</button>}</div>
         <div className={`flex-1 overflow-y-auto flex flex-col ${pdf ? 'p-1.5 gap-0.5' : 'gap-2.5 pb-2'}`} dir="auto">
           {!o && <div className="text-xs text-dim py-6 px-3 flex flex-col gap-2">
             <div className="flex items-center gap-2 text-gray-200"><span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin flex-shrink-0" />{pdf ? 'Reading the chapters…' : 'Planning your chapters…'}</div>
@@ -97,7 +97,8 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
             <article key={i} className="rounded-xl border border-border bg-app/50 p-3.5 flex flex-col gap-2.5 hover:border-accent/40 transition-colors">
               <div className="flex items-start gap-3">
                 <span className="w-7 h-7 rounded-lg bg-accent/15 text-accent grid place-items-center text-xs font-bold flex-shrink-0">{i + 1}</span>
-                <h3 className="text-sm font-semibold text-white leading-snug flex-1 min-w-0 pt-1" dir="auto">{c.title}</h3>
+                <div className="flex-1 min-w-0 pt-1"><h3 className="text-sm font-semibold text-white leading-snug" dir="auto">{c.title}</h3>
+                  {c.desc && <p className="text-xs text-gray-300 leading-relaxed mt-1" dir="auto">{c.desc}</p>}</div>
               </div>
               {!!c.kids.length && (
                 <ul className="flex flex-col gap-1 ps-10">
@@ -108,7 +109,7 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
                 </ul>)}
               <div className="flex items-center gap-1.5 ps-10 flex-wrap">
                 {[['ask', 'Ask', 'Explain this chapter in the chat', () => onAsk(`Explain the chapter ${label(c)}: the key ideas in simple words, with examples.`)],
-                  ['quiz', 'Quiz', 'Start an interview on this chapter only', () => quiz(c, i)],
+                  ['quiz', 'Interview me', 'Start an interview on this chapter only', () => quiz(c, i)],
                   ['cards', 'Cards', 'Make 10 flashcards from this chapter', () => cards(c, i)]].map(([k, l, t, f]) => (
                   <button key={k} onClick={f} disabled={!!act} title={t}
                     className="text-[11px] px-2.5 py-1 rounded-md bg-panel-2 text-dim hover:text-white hover:bg-white/10 disabled:opacity-40 transition-colors">
@@ -125,7 +126,7 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
                 <button onClick={() => pdf && go(c.page)} className="flex-1 min-w-0 flex items-baseline gap-2 py-1.5 pr-2 text-left text-sm"><span className="truncate" title={c.title}>{c.title}</span>{pdf && <span className="ml-auto text-[11px] text-dim font-mono flex-shrink-0">{c.page}</span>}</button>
                 <span className={`${act.startsWith(`${i}:`) ? 'flex' : 'hidden group-hover:flex'} items-center gap-0.5 pe-1.5 flex-shrink-0`}>
                   {[['ask', 'Ask', 'Explain this chapter in the chat', () => onAsk(`Explain the chapter ${label(c)}: the key ideas in simple words, with examples.`)],
-                    ['quiz', 'Quiz', 'Start an interview on this chapter only', () => quiz(c, i)],
+                    ['quiz', 'Interview me', 'Start an interview on this chapter only', () => quiz(c, i)],
                     ['cards', 'Cards', 'Make 10 flashcards from this chapter', () => cards(c, i)]].map(([k, l, t, f]) => (
                     <button key={k} onClick={f} disabled={!!act} title={t} className="text-[10px] px-1.5 py-0.5 rounded bg-app border border-border text-dim hover:text-white hover:border-accent/50">{act === `${i}:${k}` ? '…' : l}</button>))}
                 </span>
@@ -138,17 +139,18 @@ function Source({ study, jump, onAsk, onOpenInterview }) {
         </div>
         {note && <div className="px-3 py-2 border-t border-border text-[11px] text-gray-300">{note}</div>}
         {o?.from === 'ai' && <div className="px-3 py-2 border-t border-border text-[10px] text-dim">This PDF has no bookmarks, so Claude read the contents. Page numbers can be a page or two off.</div>}
-        {o?.from === 'subject' && <div className="px-1 pt-2 text-[10px] text-dim">A plan of what to study, for your level — the chapters are empty. Ask, Quiz and Cards work on any of them; Refresh plans again.</div>}
+        {o?.from === 'subject' && <div className="px-1 pt-2 text-[10px] text-dim">A plan of what to study, for your level — the chapters are empty. Ask, Interview me and Cards work on any of them; Refresh plans again.</div>}
       </aside>
       {pdf && <div className="island flex-1 min-w-0 overflow-hidden"><iframe key={frame} src={`/api/studies/${study.id}/source.pdf#page=${page}`} title={`${study.title} PDF`} className="w-full h-full border-0" /></div>}
     </div>
   )
 }
 
-export default function StudyWorkspace({ study, setStudy, tool, setTool, onChanged, profile }) {
+export default function StudyWorkspace({ study, setStudy, tool, setTool, onChanged, profile, openInterview, onInterviewOpened }) {
   const one = [{ id: study.id, title: study.title }]
   const [srcJump, setSrcJump] = useState(null); const [prefill, setPrefill] = useState(null); const [openIv, setOpenIv] = useState(null)
   const pick = id => { setOpenIv(null); setTool(id) }
+  useEffect(() => { if (openInterview?.id) { setOpenIv(openInterview.id); setTool('interview'); onInterviewOpened?.() } }, [openInterview?.n]) // eslint-disable-line // an interview started from another page, e.g. a roadmap stage
   const [side, setSide] = useState(null); useEffect(() => setSide(document.getElementById('ws-side')), []) // App's slot beside the page island
   return (
     <div className="h-full flex min-h-0">

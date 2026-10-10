@@ -21,6 +21,9 @@ function schedule(card, grade, now = Date.now()) {
 const GOAL_KINDS = { avg: 'average score %', minutes: 'minutes studied', sessions: 'sessions' };
 const strip = h => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 const esc = t => String(t ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+// the reverse, for model text: a prompt once went through esc, so the model wrote "List&lt;T&gt;" back and it was saved that way
+const unent = t => String(t ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+const unentOutline = o => o?.items ? { ...o, items: o.items.map(i => ({ ...i, title: unent(i.title), ...(i.desc ? { desc: unent(i.desc) } : {}) })) } : o;
 
 module.exports = (app, ctx) => {
   const { study, save, touch, json, DATA, NO_STUDY, readJson, localDay, events, loadNotes, saveNotes, makeChallenge, profileDir, studiesDir, profileFile, coachFile } = ctx;
@@ -249,7 +252,7 @@ ${body.slice(0, 12000)}`, undefined, { signal, onDelta: live('comments') }).catc
   // server.js owns /outline for PDF studies and passes everything else here. Planned once, on first view, then cached. ----------
   app.get('/api/studies/:id/outline', async (req, res) => {
     let s; try { s = study(path.basename(req.params.id)); } catch { return res.status(404).json({ error: 'no such study' }); }
-    if (s.outline && !req.query.refresh) return res.json(s.outline); // cached: plain JSON, whatever was asked for
+    if (s.outline && !req.query.refresh) return res.json(unentOutline(s.outline)); // cached: plain JSON, whatever was asked for
     const level = { beginner: 'a complete beginner', mid: 'at an intermediate level, past the basics', expert: 'an advanced learner who wants depth and edge cases' }[s.level];
     // Planning takes 15-130s. With ?stream=1 the panel watches it happen — chapters counted and the tail
     // shown as they are written — instead of one motionless sentence. Without it the route is plain JSON.
@@ -267,13 +270,22 @@ ${body.slice(0, 12000)}`, undefined, { signal, onDelta: live('comments') }).catc
     }; })();
     try {
       emit({ stage: 'planning' });
-      const r = await json(s, `Plan what to study for "${esc(s.title)}"${s.subject ? `, specifically: ${esc(s.subject)}` : ''}. ${level ? `The learner is ${level}, so start where that level starts and pitch the depth for them.` : ''}
+      // A pasted syllabus (several lines, or a long paragraph from the older one-line box) is the learner's own plan:
+      // the chapters follow it in its order instead of being invented. A one-line subject is still planned freely.
+      const own = !!s.subject && (s.subject.split('\n').filter(l => l.trim()).length >= 4 || s.subject.length > 300);
+      // plain text into the prompt, never esc(): the model copies whatever it reads, entities included
+      const r = await json(s, own ? `The learner wrote their own study outline for "${s.title}". Turn it into chapters that follow it exactly.
+<outline>
+${s.subject.replace(/<\/outline>/gi, '')}
+</outline>
+Rules: keep their order, from the first line to the last. Their headings (phases, weeks, parts, big topics) become chapters, and the items listed under a heading become that chapter's sections. Use their own wording for titles. Never reorder, never drop a listed topic, never add topics they did not list. A heading with many items may be split into consecutive chapters with a clear suffix (e.g. "C# core: types and memory", then "C# core: language features"), still in their order. Lines that are advice rather than topics ("don't waste time on syntax", "understand the mechanics", "this deserves serious attention") are not chapters or sections: put them, shortened, in that chapter's "desc". Write in the language of the outline. ${level ? `The learner is ${level}.` : ''}
+Respond with ONLY JSON: {"items": [{"title": string, "depth": 0 for a chapter, 1 for a section, "desc": string (optional, chapters only: their advice for it, one line)}]}` : `Plan what to study for "${s.title}"${s.subject ? `, specifically: ${s.subject}` : ''}. ${level ? `The learner is ${level}, so start where that level starts and pitch the depth for them.` : ''}
 Give 6 to 12 chapters in the order they should be studied, each with 2 to 5 sections inside it. Titles only, no descriptions: this is a plan of what is coming, not the material itself. Write the titles in the language of the subject.
 Respond with ONLY JSON: {"items": [{"title": string, "depth": 0 for a chapter, 1 for a section}]}`, undefined, streaming ? { signal: ac.signal, onDelta: live } : undefined);
-      const items = (r.items || []).filter(x => x.title).slice(0, 80)
-        .map(x => ({ title: String(x.title).slice(0, 200), depth: Math.min(1, Math.max(0, Math.round(+x.depth) || 0)) }));
+      const items = (r.items || []).filter(x => x.title).slice(0, own ? 250 : 80)
+        .map(x => ({ title: unent(x.title).slice(0, 200), depth: Math.min(1, Math.max(0, Math.round(+x.depth) || 0)), ...(x.desc && !x.depth ? { desc: unent(x.desc).slice(0, 300) } : {}) }));
       if (!items.length) throw new Error('No chapters came back. Try again.');
-      const s2 = study(s.id); s2.outline = { at: Date.now(), from: 'subject', items }; save(s2);
+      const s2 = study(s.id); s2.outline = { at: Date.now(), from: own ? 'outline' : 'subject', items }; save(s2);
       if (streaming) { emit({ result: s2.outline }); res.end(); } else res.json(s2.outline);
     } catch (e) {
       if (streaming) { emit({ error: e.message }); res.end(); } else res.status(500).json({ error: e.message });
@@ -615,6 +627,75 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
     if (req.body?.enabled) keep.push(`0 * * * * DBUS_SESSION_BUS_ADDRESS=${q(`unix:path=/run/user/${process.getuid()}/bus`)} ELECTRON_RUN_AS_NODE=1 ${q(process.execPath)} ${q(path.join(__dirname, 'remind.js'))} ${q(DATA)} --hour ${hour} ${TAG}`);
     const p = execFile('crontab', ['-'], e => e ? res.status(500).json({ error: `crontab failed: ${e.message}` }) : res.json({ enabled: !!req.body?.enabled, hour }));
     p.stdin.end(keep.join('\n') + '\n');
+  });
+
+  // ---------- roadmaps (career moves and skill mastery) ----------
+  // Where I am → where I want to be, as a road of stages, each with sub-steps the learner ticks off.
+  const ROADMAP = () => file('roadmap.json'), loadRoadmaps = () => readJson(ROADMAP(), []);
+  const PATHS = { change: 'change careers into a different field', grow: 'grow deeper in their current career', lead: 'get promoted or move into leadership', switch: 'switch to a different specialization within their field', start: 'land their first job, starting from zero', freelance: 'go freelance or build their own business', return: 'come back to work after a break' };
+  app.get('/api/roadmap', (req, res) => res.json(loadRoadmaps()));
+  app.delete('/api/roadmap/:rid', (req, res) => { write('roadmap.json', loadRoadmaps().filter(r => r.id !== req.params.rid)); res.json({ ok: true }); });
+  app.post('/api/roadmap/:rid', (req, res) => {
+    const list = loadRoadmaps(), r = list.find(x => x.id === req.params.rid); if (!r) return res.status(404).json({ error: 'no such roadmap' });
+    r.done = (Array.isArray(req.body?.done) ? req.body.done : []).map(String).slice(0, 200); write('roadmap.json', list); res.json({ ok: true });
+  });
+  // One study per roadmap: every step becomes a chapter, its detail shown under the title. The chapter list is
+  // written here, so the study never plans its own (outline.from 'roadmap'). Asking again opens the same study.
+  app.post('/api/roadmap/:rid/study', (req, res) => {
+    const list = loadRoadmaps(), r = list.find(x => x.id === req.params.rid); if (!r?.plan) return res.status(404).json({ error: 'no such roadmap' });
+    if (r.studyId && fs.existsSync(path.join(studiesDir(), r.studyId, 'study.json'))) return res.json({ id: r.studyId });
+    const now = Date.now(), level = r.kind === 'skill' ? { none: 'beginner', beginner: 'beginner', intermediate: 'mid', advanced: 'expert' }[r.level] || '' : '';
+    const subject = r.kind === 'skill' ? `Mastering ${r.skill}, from ${r.now.split('\n')[0].toLowerCase()} to ${r.target}` : `The road from "${r.now}" to "${r.target}"`;
+    const s = { id: now.toString(36), title: r.plan.title, subject: subject.slice(0, 600), level, hasPdf: false, roadmapId: r.id, createdAt: now, updatedAt: now, chat: [], interviews: [], quizzes: [], challenges: [],
+      outline: { at: now, from: 'roadmap', items: r.plan.stages.flatMap(st => st.steps.map(t => ({ title: t.title, desc: t.detail, depth: 0 }))) } };
+    fs.mkdirSync(path.join(studiesDir(), s.id)); save(s);
+    r.studyId = s.id; write('roadmap.json', list); res.json({ id: s.id });
+  });
+  // kind 'skill': one skill (DDD, system design…) from the learner's current level to expert, on the same road
+  const SKILL_LEVELS = { none: 'Never touched it', beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced' };
+  app.post('/api/roadmap', async (req, res) => {
+    const b = req.body || {}, clip = (v, n) => String(v || '').trim().slice(0, n), me = readJson(profileFile(), {}), skillKind = b.kind === 'skill';
+    const r = { id: Date.now().toString(36), at: Date.now(), kind: skillKind ? 'skill' : 'career', path: PATHS[b.path] ? b.path : 'other', pathOther: clip(b.pathOther, 120), now: clip(b.now, 2000), target: clip(b.target, 2000),
+      months: Math.max(1, Math.min(60, Math.round(+b.months) || 12)), hours: Math.max(1, Math.min(80, Math.round(+b.hours) || 8)), language: /arab/i.test(b.language) ? 'Arabic' : 'English', done: [] };
+    if (skillKind) {
+      r.skill = clip(b.skill, 120); r.level = SKILL_LEVELS[b.level] ? b.level : 'none'; delete r.path; delete r.pathOther;
+      if (!r.skill) return res.status(400).json({ error: 'Name the skill you want to master.' });
+      r.target = r.target || `Expert in ${r.skill}`; r.now = `${SKILL_LEVELS[r.level]} in ${r.skill}${r.now ? `\n${r.now}` : ''}`; // now/target keep the road's start and finish cards the same for both kinds
+    }
+    if (!r.now || !r.target) return res.status(400).json({ error: 'Say where you are now and where you want to be.' });
+    const ac = new AbortController(); res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+    const lang = r.language === 'Arabic' ? 'Write every text field in Egyptian colloquial Arabic, keeping technical terms and job titles in English.' : 'Write every text field in English.';
+    const shape = `Respond with ONLY JSON: {"title": string (max 8 words), "summary": string (2-3 sentences), "reality": string (one honest line on how realistic the time frame is), "stages": [{"title": string (max 6 words),${skillKind ? ' "level": "Beginner"|"Intermediate"|"Advanced"|"Expert",' : ''} "goal": string (one line: what is true once this stage is done), "duration": string (e.g. "${skillKind ? 'Weeks 1-3' : 'Months 1-2'}"), "steps": [{"title": string (max 10 words), "detail": string (1-2 sentences: how, and what counts as done)}]}], "finish": string (one line describing them at the destination)}`;
+    try {
+      const x = await json(NO_STUDY, skillKind ? `You are a world-class practitioner and teacher of ${r.skill} who has taken many people from zero to expert. ${lang}
+The learner wants to master: ${r.skill}. Their level today: ${SKILL_LEVELS[r.level]}.
+${b.now ? `About them and why they want it:\n<context>\n${clip(b.now, 2000)}\n</context>\n` : ''}Where they want to end up: ${r.target}.
+Time frame: about ${r.months} months, at ${r.hours} hours per week.
+${roles.roleContext(me)} ${roles.addressRule(me)}
+Build a mastery roadmap as a road: 4-7 stages in order from their current level to expert, each stage one real level of understanding that builds on the one before (skip what they already know). Tag each stage with its level. Each stage has 3-6 sub-steps: the concrete concepts to learn (name them precisely, e.g. "aggregates and invariants", not "core concepts"), the canonical books, talks or papers worth reading (only ones you are sure exist), and hands-on exercises or projects that prove the stage. The last stage is expert-level practice: teaching, writing, deciding trade-offs in real systems. Fit the road into the time frame; if that is unrealistic, say so in "reality".
+${shape}` : `You are a seasoned career coach who has guided hundreds of people through exactly this kind of move. ${lang}
+The person wants to ${PATHS[r.path] || r.pathOther || 'reach a new career goal'}.
+Where they are now:
+<now>
+${r.now}
+</now>
+Where they want to be:
+<target>
+${r.target}
+</target>
+Time frame: about ${r.months} months, at ${r.hours} hours per week.
+${roles.roleContext(me)} ${roles.addressRule(me)}
+Build an honest, concrete roadmap from where they are to where they want to be, as a road: 4-7 stages in order, each a clear milestone that builds on the one before, the last one being them arriving at the target. Each stage has 3-6 sub-steps: specific actions (skills to learn, things to build, people to meet, applications to send), not vague advice. Fit the whole road into the time frame and their weekly hours; if that is unrealistic, say so in "reality".
+${shape}`, undefined, { signal: ac.signal });
+      r.plan = {
+        title: clip(x.title, 100) || 'My roadmap', summary: clip(x.summary, 600), reality: clip(x.reality, 300), finish: clip(x.finish, 300),
+        stages: (x.stages || []).filter(s => s?.title).slice(0, 8).map((s, i) => ({ title: clip(s.title, 80), level: clip(s.level, 20), goal: clip(s.goal, 300), duration: clip(s.duration, 40),
+          steps: (s.steps || []).filter(t => t?.title).slice(0, 7).map((t, j) => ({ id: `${i}.${j}`, title: clip(t.title, 120), detail: clip(t.detail, 500) })) })).filter(s => s.steps.length),
+      };
+      if (!r.plan.stages.length) throw new SyntaxError('no stages');
+      if (ac.signal.aborted) return;
+      const list = loadRoadmaps(); list.unshift(r); write('roadmap.json', list.slice(0, 30)); res.json(r);
+    } catch (e) { if (!ac.signal.aborted) res.status(500).json({ error: e instanceof SyntaxError ? 'The reply came back garbled. Try again.' : e.message }); }
   });
 };
 module.exports.schedule = schedule;

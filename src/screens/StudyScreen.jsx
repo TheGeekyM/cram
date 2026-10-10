@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import Markdown from '../components/Markdown.jsx'
 import { api } from '../api.js'
 import { ask } from '../components/Confirm.jsx'
-import { useMic, speak, stopSpeech, isRtl } from '../voice.js'
+import { useMic, speak, stopSpeech, isRtl, dirOf } from '../voice.js'
 
 const Ico = ({ d }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
 function CopyBtn({ text }) {
@@ -27,7 +27,7 @@ const SPARK = <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z
 const SEND = <><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></>
 function Chips({ items, onPick, className = '' }) {
   return <div className={`flex flex-wrap justify-center gap-2 ${className}`}>{items.map((h, i) => (
-    <button key={h} dir="auto" onClick={() => onPick(h)} style={{ animationDelay: `${120 + i * 70}ms` }} className="chat-chip" title="Ask this">{h}</button>
+    <button key={h} dir={dirOf(h)} onClick={() => onPick(h)} style={{ animationDelay: `${120 + i * 70}ms` }} className="chat-chip" title="Ask this">{h}</button>
   ))}</div>
 }
 const Dots = () => <span className="chat-dots inline-flex gap-1.5 py-1.5" aria-label="Thinking"><span /><span /><span /></span>

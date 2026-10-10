@@ -4,13 +4,14 @@
 // ponytail: heuristic repair; the caller retries the model once if this still throws.
 function slice(text) {
   const start = text.search(/[\[{]/); if (start < 0) throw new Error('No JSON in the model reply.');
-  let depth = 0, inStr = false, esc = false;
+  const open = []; let inStr = false, esc = false;
   for (let i = start; i < text.length; i++) {
     const c = text[i];
     if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
-    if (c === '"') inStr = true; else if (c === '{' || c === '[') depth++; else if (c === '}' || c === ']') { if (--depth === 0) return text.slice(start, i + 1); }
+    if (c === '"') inStr = true; else if (c === '{' || c === '[') open.push(c === '{' ? '}' : ']'); else if (c === '}' || c === ']') { open.pop(); if (!open.length) return text.slice(start, i + 1); }
   }
-  return text.slice(start); // unbalanced: let JSON.parse report it
+  // unbalanced: models sometimes drop the last closer(s) — close what is still open, JSON.parse judges the rest
+  return text.slice(start).trimEnd() + open.reverse().join('');
 }
 // a quote closes a string only if the next non-space char is , : } ] or the end
 function repairQuotes(s) {
@@ -45,5 +46,6 @@ if (require.main === module) {
   assert.deepStrictEqual(parse('{"s":"line one\nline two"}'), { s: 'line one\nline two' }, 'raw newline in string');
   assert.deepStrictEqual(parse('{"url":"https://x.y/a?b=\\"c\\""}'), { url: 'https://x.y/a?b="c"' }, 'already escaped quotes untouched');
   assert.throws(() => parse('no json here'), 'no JSON throws');
+  assert.deepStrictEqual(parse('Plan first.{"items":[{"t":"a","d":0},{"t":"b","d":1}]'), { items: [{ t: 'a', d: 0 }, { t: 'b', d: 1 }] }, 'missing final closer');
   console.log('jsonish ok');
 }

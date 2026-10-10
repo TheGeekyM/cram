@@ -21,7 +21,7 @@ export function useSessions(kind, studies, scope = GENERAL) {
   return {
     list,
     update: it => setList(l => l.map(x => x.id === it.id ? { ...x, ...it } : x)),
-    add: (it, studyId) => setList(l => [{ ...it, studyId, studyTitle: studies.find(s => s.id === studyId)?.title }, ...l]),
+    add: (it, studyId) => setList(l => l.some(x => x.id === it.id) ? l : [{ ...it, studyId, studyTitle: studies.find(s => s.id === studyId)?.title }, ...l]), // no twin when a reloaded list already has it
     remove: id => setList(l => l.filter(x => x.id !== id)),
   }
 }

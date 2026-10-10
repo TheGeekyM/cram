@@ -1,6 +1,8 @@
 const { app, BrowserWindow, dialog, shell, Menu, safeStorage } = require('electron');
 // Chromium reaches PipeWire/PulseAudio through XDG_RUNTIME_DIR; a launch without it (runuser, cron, some launchers) plays audio into nothing
 if (process.platform === 'linux' && process.getuid) { const run = `/run/user/${process.getuid()}`; process.env.XDG_RUNTIME_DIR ||= run; process.env.DBUS_SESSION_BUS_ADDRESS ||= `unix:path=${run}/bus`; }
+// start.sh runs `electron main.js`, which names the app "Electron"; pin the folder so dev and the installed app share one data dir
+app.setPath('userData', require('path').join(app.getPath('appData'), 'Cram'));
 process.env.CRAM_DATA = app.getPath('userData');
 const fs = require('fs');
 const path = require('path');
@@ -31,12 +33,15 @@ app.whenReady().then(() => {
   server.showInFolder = p => shell.showItemInFolder(p);
   let win; // the dialog needs a parent window: a parentless GTK chooser can come back empty on this setup
   server.pickPdf = async () => { const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] }); console.log('[pick-pdf]', JSON.stringify(r)); return r.canceled ? null : r.filePaths[0]; };
-  const srv = server.listen(0, '127.0.0.1', () => {
+  // A fixed port so `tailscale serve` can point the phone at it; a random one if it is taken (a second copy of Cram)
+  const PORT = +process.env.CRAM_PORT || 3999;
+  const open = () => {
+    server.port = srv.address().port;
     win = new BrowserWindow({
       width: 1200, height: 800, minWidth: 800, minHeight: 500,
       backgroundColor: '#0f1115', autoHideMenuBar: true, title: 'Cram', icon: path.join(__dirname, 'build/icon.png'),
     });
-    win.loadURL(`http://127.0.0.1:${srv.address().port}`);
+    win.loadURL(`http://127.0.0.1:${server.port}/?key=${server.accessKey()}`);
     win.webContents.on('context-menu', () => ctx.popup());
     // ponytail: match physical key so Ctrl+V works on Arabic/any layout
     const keys = { KeyV: 'paste', KeyC: 'copy', KeyX: 'cut', KeyA: 'selectAll' };
@@ -45,6 +50,7 @@ app.whenReady().then(() => {
     });
     win.webContents.session.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media')); // the mic, for spoken interview answers
     win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  });
+  };
+  let srv = server.listen(PORT, '127.0.0.1', open).on('error', e => { if (e.code !== 'EADDRINUSE') throw e; srv = server.listen(0, '127.0.0.1', open); });
 });
 app.on('window-all-closed', () => app.quit());

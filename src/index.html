@@ -1,5 +1,8 @@
 <!DOCTYPE html>
 <html lang="en" class="dark">
-  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Cram</title></head>
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Cram</title>
+    <!-- ponytail: the manifest has no start_url, so it defaults to this page's URL, ?key= included: an iOS home-screen app keeps its own cookies and needs the key again -->
+    <link rel="manifest" href="manifest.webmanifest" /><link rel="apple-touch-icon" href="icon.png" /><meta name="theme-color" content="#121316" />
+    <meta name="mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-status-bar-style" content="black" /></head>
   <body style="background:#121316"><div id="root"></div><script type="module" src="/main.jsx"></script></body>
 </html>
