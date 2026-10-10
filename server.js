@@ -101,6 +101,12 @@ app.post('/api/settings', (req, res) => {
   }
   if (['auto', 'api'].includes(req.body.provider)) s.provider = req.body.provider;
   if (typeof req.body.blogDaily === 'boolean') s.blogDaily = req.body.blogDaily; // two articles a day, written while Cram is open
+  // Voice: which engine speaks, and its voice per language (see features.js /api/speak, voiceProviders.js)
+  if (['auto', 'edge', 'gemini', 'openai', 'elevenlabs', 'local'].includes(req.body.voiceEngine)) s.voiceEngine = req.body.voiceEngine;
+  const voiceId = v => typeof v === 'string' && /^[\w .:@()-]{1,80}$/.test(v);
+  for (const k of ['geminiVoice', 'openaiVoice']) if (voiceId(req.body[k])) s[k] = req.body[k];
+  for (const k of ['edgeVoices', 'localVoices']) if (req.body[k] && typeof req.body[k] === 'object')
+    s[k] = { ...(s[k] || {}), ...Object.fromEntries(['ar', 'en'].filter(l => voiceId(req.body[k][l])).map(l => [l, req.body[k][l]])) };
   fs.writeFileSync(SETTINGS, JSON.stringify(s)); res.json({ ok: true });
 });
 

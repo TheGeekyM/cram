@@ -436,45 +436,10 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
   });
 
   // ---------- read aloud: Microsoft Edge neural voices (online, human-like), espeak through speech-dispatcher when offline ----------
-  // ponytail: msedge-tts uses Edge's unofficial read-aloud endpoint; if Microsoft changes it, the espeak fallback keeps working
-  const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
-  const VOICES = { ar: 'ar-EG-SalmaNeural', en: 'en-US-AvaMultilingualNeural' };
+  // Engines live in voiceProviders.js (Edge, Gemini, OpenAI); ElevenLabs is below; espeak is the last resort.
   const spdEnv = { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}` };
   const hasSpd = ['/usr/bin/spd-say', '/usr/local/bin/spd-say'].some(f => fs.existsSync(f));
-  async function neural(text, lang) {
-    const tts = new MsEdgeTTS();
-    try {
-      await tts.setMetadata(VOICES[lang], OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(text), chunks = [];
-      const timer = setTimeout(() => audioStream.destroy(new Error('voice service timed out')), 15000);
-      try { for await (const c of audioStream) chunks.push(c); } finally { clearTimeout(timer); }
-      if (!chunks.length) throw new Error('voice service returned no audio');
-      return Buffer.concat(chunks);
-    } finally { try { tts.close(); } catch {} }
-  }
-  // Gemini TTS when a key is set in Settings: far more human, and it takes direction (an Egyptian interviewer's accent and pace)
-  const GEMINI_TTS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts']; // newest first; a 404 moves on
   const heard = new Map(); // lang:text → wav, so replaying a question does not spend quota again
-  const wav = (pcm, rate) => { const h = Buffer.alloc(44); h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8); h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(pcm.length, 40); return Buffer.concat([h, pcm]); };
-  async function gemini(text, lang, key) {
-    const style = lang === 'ar'
-      ? 'Say this like a friendly, relaxed Egyptian job interviewer talking face to face, with a natural Cairo Egyptian accent (not formal Arabic), at a calm conversational pace, keeping English technical words in English'
-      : 'Say this like a friendly, relaxed job interviewer talking face to face, at a calm conversational pace';
-    let last;
-    for (const model of GEMINI_TTS) {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, signal: AbortSignal.timeout(40000),
-        body: JSON.stringify({ contents: [{ parts: [{ text: `${style}:\n${text}` }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Achird' } } } } }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (r.status === 404) { last = new Error(`${model} is not available`); continue; }
-      if (!r.ok) throw new Error(j.error?.message || `Gemini TTS answered ${r.status}`);
-      const audio = j.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
-      if (!audio) throw new Error('Gemini returned no audio');
-      return wav(Buffer.from(audio.data, 'base64'), +(/rate=(\d+)/.exec(audio.mimeType || '')?.[1]) || 24000); // raw 16-bit PCM
-    }
-    throw last;
-  }
   // ElevenLabs when a key and a voice are chosen in Settings: the most human voices; Egyptian ones come from its voice library
   const EL = 'https://api.elevenlabs.io/v1', SETTINGS_FILE = path.join(DATA, 'settings.json'), cfg = () => readJson(SETTINGS_FILE, {}); // keys are machine-level, not per profile
   const el = async (url, key, opts = {}) => {
@@ -547,13 +512,60 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
     }) });
     return Buffer.from(await r.arrayBuffer());
   }
+  // ---------- choose the voice engine: Settings → Voice. 'auto' keeps the original chain ----------
+  const vp = require('./voiceProviders');
+  const edgeVoiceFor = (conf, lang) => conf.edgeVoices?.[lang] || vp.EDGE_DEFAULT[lang];
+  const openaiKey = conf => conf.providerKeys?.gpt;
+  // One engine + voice → audio. Throws when it cannot; the caller falls back.
+  async function speakWith(engine, voice, text, lang, conf) {
+    if (engine === 'edge') return vp.edgeSpeak(text, voice || edgeVoiceFor(conf, lang));
+    if (engine === 'gemini') { if (!conf.geminiKey) throw new Error('no Gemini key'); return vp.geminiSpeak(conf.geminiKey, text, voice || conf.geminiVoice || 'Achird'); }
+    if (engine === 'openai') { if (!openaiKey(conf)) throw new Error('no OpenAI key'); return vp.openaiSpeak(openaiKey(conf), text, voice || conf.openaiVoice || 'marin'); }
+    if (engine === 'elevenlabs') {
+      const s = voice ? { ...conf, elevenVoices: { ...(conf.elevenVoices || {}), [lang]: { id: voice } } } : conf;
+      if (!s.elevenKey || !s.elevenVoices?.[lang]) throw new Error('no ElevenLabs key or voice');
+      return { audio: await eleven(text, lang, s), type: 'audio/mpeg' };
+    }
+    throw new Error(`unknown voice engine ${engine}`);
+  }
+  const voiceOf = (engine, conf, lang) => ({ edge: edgeVoiceFor(conf, lang), gemini: conf.geminiVoice || 'Achird', openai: conf.openaiVoice || 'marin', elevenlabs: conf.elevenVoices?.[lang]?.id }[engine]);
+  // The voices an engine offers, for the Settings lists (ElevenLabs keeps its own /api/eleven/voices).
+  app.get('/api/voice/voices', async (req, res) => {
+    const conf = cfg(), engine = String(req.query.engine || '');
+    try {
+      if (engine === 'edge') return res.json({ voices: await vp.edgeVoices() });
+      if (engine === 'gemini') return res.json({ voices: await vp.geminiVoices(conf.geminiKey, String(req.query.search || '')) });
+      if (engine === 'openai') return res.json({ voices: vp.OPENAI_VOICES });
+      res.status(400).json({ error: 'unknown engine' });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+  // Hear a voice before choosing it — cached, so a second listen costs nothing.
+  const SAMPLE = { ar: 'أهلاً، أنا معاك. احكيلي كده عن آخر مشروع اشتغلت عليه، إيه أصعب حاجة قابلتك فيه؟', en: "Hi, I'm here with you. Tell me about the last project you worked on — what was the hardest part?" };
+  app.post('/api/voice/try', async (req, res) => {
+    const conf = cfg(), engine = String(req.body?.engine || ''), voice = String(req.body?.voice || ''), lang = req.body?.lang === 'en' ? 'en' : 'ar';
+    const k = `try:${engine}:${voice}:${lang}`;
+    try {
+      const hit = heard.get(k) || await speakWith(engine, voice, SAMPLE[lang], lang, conf);
+      remember(k, hit); res.type(hit.type).send(hit.audio);
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
   app.get('/api/speak', (req, res) => res.json({ available: true }));
   app.post('/api/speak', async (req, res) => {
     execFile('spd-say', ['-C'], { env: spdEnv }, () => {});
     const text = String(req.body?.text || '').slice(0, 4000), lang = /arab/i.test(req.body?.lang || '') || /[\u0600-\u06FF]/.test(text) ? 'ar' : 'en';
     if (!text || req.body?.stop) return res.json({ ok: true });
-    const conf = cfg();
-    if (conf.elevenKey && conf.elevenVoices?.[lang]) {
+    const conf = cfg(), engine = conf.voiceEngine || 'auto';
+    // A chosen engine first; when it fails, Edge in the same language, then espeak (below).
+    if (engine !== 'auto' && engine !== 'edge') {
+      const voice = voiceOf(engine, conf, lang), k = `${engine}:${voice}:${text}`;
+      try {
+        const t0 = Date.now(), hit = heard.get(k) || await speakWith(engine, voice, text, lang, conf);
+        remember(k, hit); console.log(`[speak] ${engine} ${voice} ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
+        return res.type(hit.type).send(hit.audio);
+      } catch (e) { console.warn(`[speak] ${engine} failed, using Edge:`, e.message); }
+    }
+    if (engine === 'auto' && conf.elevenKey && conf.elevenVoices?.[lang]) {
       try {
         const t0 = Date.now(), k = `el:${conf.elevenModel}:${conf.elevenVoices[lang].id}:${text}`, hit = heard.get(k) || await eleven(text, lang, conf);
         remember(k, hit); console.log(`[speak] elevenlabs ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
@@ -561,17 +573,19 @@ Respond with ONLY JSON: {"fit": {"score": number 0-100, "summary": string (2-3 s
       } catch (e) { console.warn('[speak] elevenlabs failed, trying the next voice:', e.message); }
     }
     const key = conf.geminiKey;
-    if (key) {
+    if (engine === 'auto' && key) {
       try {
-        const t0 = Date.now(), k = `${lang}:${text}`, hit = heard.get(k) || await gemini(text, lang, key);
-        heard.delete(k); heard.set(k, hit); if (heard.size > 40) heard.delete(heard.keys().next().value);
-        console.log(`[speak] gemini ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
-        return res.type('audio/wav').send(hit);
+        const t0 = Date.now(), v = conf.geminiVoice || 'Achird', k = `gemini:${v}:${text}`, hit = heard.get(k) || await vp.geminiSpeak(key, text, v);
+        remember(k, hit); console.log(`[speak] gemini ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
+        return res.type(hit.type).send(hit.audio);
       } catch (e) { console.warn('[speak] gemini voice failed, using Edge:', e.message); }
     }
     try {
-      const t0 = Date.now(), mp3 = await neural(text, lang); console.log(`[speak] ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
-      res.type('audio/mpeg').send(mp3);
+      const t0 = Date.now(), v = edgeVoiceFor(conf, lang), k = `edge:${v}:${text}`;
+      // The chosen Edge voice; if it cannot read this script, the default voice for the language.
+      const hit = heard.get(k) || await vp.edgeSpeak(text, v).catch(e => v !== vp.EDGE_DEFAULT[lang] ? vp.edgeSpeak(text, vp.EDGE_DEFAULT[lang]) : Promise.reject(e));
+      remember(k, hit); console.log(`[speak] edge ${v} ${lang} ${text.length} chars in ${Date.now() - t0}ms`);
+      res.type(hit.type).send(hit.audio);
     } catch (e) {
       console.warn('[speak] neural voice failed, using espeak:', e.message);
       if (!hasSpd) return res.status(502).json({ error: `Read-aloud is unavailable: ${e.message}` });

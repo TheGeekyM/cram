@@ -3,7 +3,10 @@
   "version": "0.3.0",
   "description": "Cram: a NotebookLM-style study desk. Attach a PDF or name a subject, then ask, quiz, get interviewed and solve coding challenges, powered by Claude.",
   "homepage": "https://github.com/TheGeekyM/cram",
-  "repository": { "type": "git", "url": "https://github.com/TheGeekyM/cram.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheGeekyM/cram.git"
+  },
   "main": "main.js",
   "scripts": {
     "build": "vite build",
@@ -35,9 +38,9 @@
     "highlight.js": "^11.12.0",
     "lowlight": "^3.3.0",
     "marked": "^18.0.12",
-    "msedge-tts": "^2.0.7",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.1.1",
@@ -58,6 +61,7 @@
       "auth.js",
       "cli.js",
       "features.js",
+      "voiceProviders.js",
       "profiles.js",
       "providers.js",
       "roles.js",

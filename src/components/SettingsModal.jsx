@@ -163,14 +163,127 @@ function ElevenPanel({ settings, onChange }) {
   )
 }
 
-function VoiceSection({ settings, onChange, gkey, setGkey }) {
+// One engine's voices as a grid: ▶ hears it say a line (Egyptian Arabic or English), a click chooses it.
+function VoiceGrid({ engine, voices, value, onPick, previewLang }) {
+  const [playing, setPlaying] = useState(null); const [err, setErr] = useState(''); const audio = useRef(null)
+  useEffect(() => () => audio.current?.pause(), [])
+  const play = async v => {
+    audio.current?.pause(); if (playing === v.id) return setPlaying(null)
+    setPlaying(`load:${v.id}`); setErr('')
+    const r = await fetch('/api/voice/try', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine, voice: v.id, lang: previewLang }) })
+    if (!r.headers.get('content-type')?.startsWith('audio/')) { setPlaying(null); return setErr((await r.json().catch(() => ({}))).error || 'Could not play this voice.') }
+    const a = audio.current = new Audio(URL.createObjectURL(await r.blob())); a.onended = () => setPlaying(null); a.play().catch(() => setPlaying(null)); setPlaying(v.id)
+  }
+  if (!voices) return <div className="text-xs text-dim py-2">Loading voices…</div>
   return (
     <div>
-      <SectionTitle title="Voice" sub="What the interviewer sounds like, and the key behind the human-like voice." />
-      <ElevenPanel settings={settings} onChange={onChange} />
-      <label className="text-[11px] uppercase tracking-wider text-dim">Gemini API key (human-like interviewer voice)</label>
-      <input className="input mt-1 font-mono text-xs" value={gkey} onChange={e => setGkey(e.target.value)} placeholder="AIza…" />
-      <p className="text-[11px] text-dim mt-1">Get one at <a className="text-accent hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Without it, questions use the Edge voice.</p>
+      <div className="grid grid-cols-2 gap-1.5 max-h-64 overflow-y-auto -mx-1 px-1">
+        {voices.map(v => (
+          <div key={v.id} onClick={() => onPick(v.id)} role="button"
+            className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 cursor-pointer ${value === v.id ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40'}`}>
+            <button onClick={e => { e.stopPropagation(); play(v) }} className="w-7 h-7 rounded-full bg-panel-2 text-white grid place-items-center flex-shrink-0 text-[10px]" title={`Hear it in ${previewLang === 'ar' ? 'Egyptian Arabic' : 'English'}`}>{playing === v.id ? '■' : playing === `load:${v.id}` ? '…' : '▶'}</button>
+            <div className="min-w-0 flex-1"><div className={`text-xs truncate ${value === v.id ? 'text-accent font-medium' : 'text-white'}`} dir="auto">{v.name}{v.arabic && <span className="text-[9px] uppercase tracking-wider text-accent/80 ms-1.5">Arabic</span>}</div>
+              {v.traits && <div className="text-[10px] text-dim truncate" dir="auto">{v.traits}</div>}</div>
+            {value === v.id && <span className="badge badge-green">in use</span>}
+          </div>))}
+      </div>
+      {err && <div className="text-xs text-error mt-1">{err}</div>}
+    </div>
+  )
+}
+
+const LangPills = ({ lang, setLang, label = 'Preview in' }) => (
+  <div className="flex items-center gap-1 text-[11px]"><span className="text-dim me-1">{label}</span>
+    {[['ar', 'عربي'], ['en', 'English']].map(([l, t]) => <button key={l} onClick={() => setLang(l)} className={`px-2 py-0.5 rounded-full border ${lang === l ? 'border-accent text-accent' : 'border-border text-dim hover:text-white'}`}>{t}</button>)}
+  </div>
+)
+
+// Edge: free, no key — one voice per language (a voice cannot read the other script).
+function EdgePanel({ settings, onChange }) {
+  const [voices, setVoices] = useState(null); const [lang, setLang] = useState('ar')
+  useEffect(() => { api.get('/api/voice/voices?engine=edge').then(r => setVoices(r.voices || [])) }, [])
+  const chosen = settings?.edgeVoices || {}
+  const pick = async id => { await api.post('/api/settings', { edgeVoices: { [lang]: id } }); onChange() }
+  const shown = voices && voices.filter(v => lang === 'ar' ? v.arabic : !v.arabic)
+  return (
+    <div className="panel p-3 mb-3 flex flex-col gap-2">
+      <div className="flex items-center"><span className="text-xs font-semibold text-white flex-1">Edge voices</span><LangPills lang={lang} setLang={setLang} label="Voice for" /></div>
+      <p className="text-[11px] text-dim -mt-1">Microsoft's neural voices: free, no key, no account. {lang === 'ar' ? 'Egyptian voices are ar-EG.' : 'Multilingual voices also read Arabic.'}</p>
+      <VoiceGrid engine="edge" voices={shown} value={chosen[lang] || (lang === 'ar' ? 'ar-EG-SalmaNeural' : 'en-US-AvaMultilingualNeural')} onPick={pick} previewLang={lang} />
+    </div>
+  )
+}
+
+// Gemini: a key, then any of its 30 voices or Google's voice library (search "Egyptian").
+function GeminiPanel({ settings, onChange, gkey, setGkey }) {
+  const [voices, setVoices] = useState(null); const [search, setSearch] = useState('Egyptian'); const [lang, setLang] = useState('ar')
+  const has = !!settings?.geminiKey
+  const load = (q = search) => { setVoices(null); api.get(`/api/voice/voices?engine=gemini&search=${encodeURIComponent(has ? q : '')}`).then(r => setVoices(r.voices || [])) }
+  useEffect(() => { load() }, [has])
+  const saveKey = async () => { await api.post('/api/settings', { geminiKey: gkey }); onChange() }
+  const pick = async id => { await api.post('/api/settings', { geminiVoice: id }); onChange() }
+  return (
+    <div className="panel p-3 mb-3 flex flex-col gap-2">
+      <span className="text-xs font-semibold text-white">Gemini voice</span>
+      <div className="flex gap-2"><input className="input flex-1 font-mono text-xs" value={gkey} onChange={e => setGkey(e.target.value)} placeholder="Gemini API key (AIza…)" />
+        <button className="btn btn-ghost text-xs" onClick={saveKey}>Save key</button></div>
+      <p className="text-[11px] text-dim -mt-1">Get one at <a className="text-accent hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Egyptian Arabic is a listed language; the library has Egyptian voices.</p>
+      <div className={has ? 'flex flex-col gap-2' : 'flex flex-col gap-2 opacity-50 pointer-events-none'}>
+        <div className="flex gap-2"><input className="input flex-1 text-xs" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search Google's voice library, e.g. Egyptian" />
+          <button className="btn btn-ghost text-xs" onClick={() => load()}>Search</button></div>
+        <LangPills lang={lang} setLang={setLang} />
+        <VoiceGrid engine="gemini" voices={voices} value={settings?.geminiVoice || 'Achird'} onPick={pick} previewLang={lang} />
+      </div>
+    </div>
+  )
+}
+
+// ChatGPT: the same OpenAI key as the GPT provider, then one of its 13 voices.
+function OpenAiPanel({ settings, onChange }) {
+  const [voices, setVoices] = useState(null); const [lang, setLang] = useState('ar')
+  useEffect(() => { api.get('/api/voice/voices?engine=openai').then(r => setVoices(r.voices || [])) }, [])
+  const gpt = (settings?.providers || []).find(p => p.id === 'gpt')
+  const pick = async id => { await api.post('/api/settings', { openaiVoice: id }); onChange() }
+  return (
+    <div className="panel p-3 mb-3 flex flex-col gap-2">
+      <span className="text-xs font-semibold text-white">ChatGPT voice</span>
+      {gpt && <ProviderKey p={{ ...gpt, key: { ...gpt.key, label: 'OpenAI API key (shared with the GPT provider)' } }} onChange={onChange} />}
+      <p className="text-[11px] text-dim -mt-1">gpt-4o-mini-tts, billed per use. Arabic is asked for in an Egyptian accent; it follows that loosely.</p>
+      <div className={gpt?.hasKey ? 'flex flex-col gap-2' : 'flex flex-col gap-2 opacity-50 pointer-events-none'}>
+        <LangPills lang={lang} setLang={setLang} />
+        <VoiceGrid engine="openai" voices={voices} value={settings?.openaiVoice || 'marin'} onPick={pick} previewLang={lang} />
+      </div>
+    </div>
+  )
+}
+
+const ENGINES = [
+  ['auto', 'Auto', 'As before: ElevenLabs if a voice is chosen, else Gemini if a key is set, else Edge.', []],
+  ['edge', 'Edge', 'Microsoft\'s neural voices, English and Arabic. No key, no account, no cost.', ['Free']],
+  ['gemini', 'Gemini', 'Google\'s voices; Egyptian Arabic is a listed language. Needs a Gemini API key.', ['Paid key']],
+  ['openai', 'ChatGPT', 'OpenAI\'s voices (gpt-4o-mini-tts), accent set by instruction. Needs an OpenAI API key.', ['Paid key']],
+  ['elevenlabs', 'ElevenLabs', 'The most natural voices; Egyptian ones from its library. Billed per character.', ['Paid plan']],
+]
+
+function VoiceSection({ settings, onChange, gkey, setGkey }) {
+  const engine = settings?.voiceEngine || 'auto'
+  const choose = async id => { await api.post('/api/settings', { voiceEngine: id }); onChange() }
+  return (
+    <div>
+      <SectionTitle title="Voice" sub="Which engine speaks — the interviewer, read-aloud answers — and its voice. If the chosen one fails, Edge takes over, then the system voice." />
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {ENGINES.map(([id, name, sub, tags]) => (
+          <button key={id} onClick={() => choose(id)} className={`text-start rounded-lg border p-3 ${engine === id ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40'}`}>
+            <span className={`flex flex-wrap items-center gap-1.5 text-xs font-medium ${engine === id ? 'text-accent' : 'text-white'}`}>{name}{engine === id ? ' · active' : ''}
+              {tags.map(t => <span key={t} className={`text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded-full border ${/free/i.test(t) ? 'border-success/40 text-success bg-success/10' : 'border-border text-dim'}`}>{t}</span>)}</span>
+            <span className="block text-[11px] text-dim mt-1">{sub}</span>
+          </button>))}
+      </div>
+      {engine === 'edge' && <EdgePanel settings={settings} onChange={onChange} />}
+      {engine === 'gemini' && <GeminiPanel settings={settings} onChange={onChange} gkey={gkey} setGkey={setGkey} />}
+      {engine === 'openai' && <OpenAiPanel settings={settings} onChange={onChange} />}
+      {(engine === 'elevenlabs' || engine === 'auto') && <ElevenPanel settings={settings} onChange={onChange} />}
+      {engine === 'auto' && <GeminiPanel settings={settings} onChange={onChange} gkey={gkey} setGkey={setGkey} />}
     </div>
   )
 }
