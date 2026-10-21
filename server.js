@@ -419,7 +419,7 @@ const storiesFor = iv => {
 };
 const realBase = iv => `You are interviewing a candidate in a real ${rounds.resolve(iv).label} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)} ${roles.addressRule(readJson(PROFILE, {}))}
 ${rounds.resolve(iv).guide}
-${PERSONAS[iv.persona] || ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
+${PERSONAS[iv.persona] || ''}${iv.subject ? `Keep every question on ${iv.subject}: that is what the candidate asked to be interviewed in. Cover it from different angles at this round's style and level.\n` : ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
 // A consultation is not an interview: Cram is the person in front of them — a patient, a client, a
 // customer — and the learner is the professional running the encounter. Same turns, grading and rubric
 // machinery; only who is speaking changes.
@@ -452,7 +452,7 @@ app.post('/api/studies/:id/interviews', async (req, res) => {
     if (!String(role || '').trim()) return res.status(400).json({ error: 'Say which role you are interviewing for.' });
     // snapshot the round onto the interview: re-deriving or editing the role later must never change
     // how a session already under way is run or graded
-    Object.assign(iv, { mode: 'real', ...picked, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral', ...(prof.role?.clientWord ? { clientWord: prof.role.clientWord } : {}) });
+    Object.assign(iv, { mode: 'real', ...picked, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), subject: String(req.body.subject || '').trim().slice(0, 120), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral', ...(prof.role?.clientWord ? { clientWord: prof.role.clientWord } : {}) });
   } else if (req.body.focus?.title) iv.focus = { title: String(req.body.focus.title).slice(0, 160), from: Math.round(+req.body.focus.from) || null, to: Math.round(+req.body.focus.to) || null };
   try { iv.pending = nextQ(await json(s, nextPrompt(iv))); (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
   catch (e) { res.status(500).json({ error: e.message }); }

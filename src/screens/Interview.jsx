@@ -60,10 +60,10 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
   const [role, setRole] = useState(saved.role || profile?.target || '')
   const [sen, setSen] = useState(levels.includes(saved.seniority) ? saved.seniority : levels[Math.min(1, levels.length - 1)])
   const [round, setRound] = useState(list.some(r => r[0] === saved.round) ? saved.round : list[0][0])
-  const [lang, setLang] = useState(saved.language || 'English'); const [jd, setJd] = useState(''); const [showJd, setShowJd] = useState(false); const [persona, setPersona] = useState(saved.persona || 'neutral')
+  const [lang, setLang] = useState(saved.language || 'English'); const [jd, setJd] = useState(''); const [showJd, setShowJd] = useState(false); const [persona, setPersona] = useState(saved.persona || 'neutral'); const [subject, setSubject] = useState(saved.subject || '')
   const go = () => {
     if (round === 'coding') return onCoding?.()
-    const o = { role: role.trim(), seniority: sen, round, language: lang, persona }
+    const o = { role: role.trim(), seniority: sen, round, language: lang, persona, subject: subject.trim() }
     try { localStorage.setItem('cram:iv-setup', JSON.stringify(o)) } catch {}
     onStart({ ...o, jd })
   }
@@ -79,6 +79,7 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
         <label className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Role</span><input className="input" placeholder={profile?.role?.title || profile?.target || 'e.g. Backend engineer, Product manager'} value={role} onChange={e => setRole(e.target.value)} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} autoFocus dir="auto" /></label>
         <div className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Level</span><Pills value={sen} onChange={setSen} options={levels} /></div>
       </div>
+      <label className="relative flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Topic <span className="normal-case tracking-normal">(optional)</span></span><input className="input" placeholder="What to be interviewed in, e.g. DDD, Laravel, system design" value={subject} onChange={e => setSubject(e.target.value.slice(0, 120))} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} dir="auto" /></label>
       <div className="relative flex flex-col gap-1.5">
         <span className="text-[11px] uppercase tracking-wider text-dim">Round</span>
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
@@ -139,7 +140,7 @@ function Hero({ busy, onStart }) {
 function Card({ iv, onOpen, onDelete }) {
   const { n, ok, avg } = stats(iv); const open = iv.status === 'open'
   return (
-    <Tile dot={open ? 'bg-accent animate-pulse' : 'bg-dim'} title={real(iv) ? (iv.roundLabel || roundName(iv.round)) : iv.difficulty[0].toUpperCase() + iv.difficulty.slice(1)} sub={real(iv) ? iv.seniority : iv.language} study={real(iv) ? `${iv.role}${iv.jd ? ' · job description' : ''}` : ''} onDelete={onDelete}
+    <Tile dot={open ? 'bg-accent animate-pulse' : 'bg-dim'} title={real(iv) ? (iv.roundLabel || roundName(iv.round)) : iv.difficulty[0].toUpperCase() + iv.difficulty.slice(1)} sub={real(iv) ? iv.seniority : iv.language} study={real(iv) ? `${iv.role}${iv.subject ? ` · ${iv.subject}` : ''}${iv.jd ? ' · job description' : ''}` : ''} onDelete={onDelete}
       badge={<span className="flex items-center gap-1.5">
         {iv.report && <span className="badge-purple py-0 inline-flex items-center gap-1" title={`Coaching ready · ${iv.report.resources.length} verified links`}><Ico s={10} d={<path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"/>} />{iv.report.resources.length}</span>}
         <span className={`badge py-0 ${open ? 'badge-green' : ''}`}>{open ? 'In progress' : 'Ended'}</span>
