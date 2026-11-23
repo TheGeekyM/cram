@@ -9,6 +9,11 @@
 const QA = 'qa', CONSULT = 'consult';
 
 const BUILTIN = {
+  topic: { // one subject the learner names (DDD, Laravel, ...): stored on the interview as `subject`
+    label: 'Topic', kind: QA,
+    rubric: ['Correctness', 'Depth', 'Practical use', 'Clarity'],
+    guide: 'Interview in depth on the one topic the candidate named: fundamentals, how it works inside, real-world use, pitfalls, and trade-offs against the alternatives. Go from basics to hard as the answers allow.',
+  },
   technical: {
     label: 'Technical', kind: QA,
     rubric: ['Correctness', 'Depth', 'Trade-offs', 'Clarity'],

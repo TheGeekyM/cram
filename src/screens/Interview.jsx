@@ -33,6 +33,7 @@ const ROUNDS = [
   ['management', 'Management', 'People, delivery, conflict', <><circle cx="9" cy="7" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M15 20a4.5 4.5 0 0 1 6-4"/></>],
   ['system-design', 'System design', 'Staged: requirements to scale', <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6.5h4a2 2 0 0 1 2 2V14"/></>],
   ['architecture', 'Architecture', 'Styles, trade-offs, NFRs', <><path d="M3 21h18"/><path d="M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/></>],
+  ['topic', 'Topic', 'Any subject you name', <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M8 7h8"/></>],
   ['coding', 'Coding', 'Opens a challenge in Code', <><path d="M4 17 10 11 4 5"/><path d="M12 19h8"/></>],
 ]
 const roundName = id => ROUNDS.find(r => r[0] === id)?.[1] || id
@@ -53,8 +54,8 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
   // The rounds this profile's role actually has — a nutritionist gets a client consultation, not system
   // design. The built-in six are the fallback for a profile with no derived role yet.
   const own = (profile?.rounds || []).map(r => [r.id, r.label, r.sub || (r.kind === 'consult' ? 'You run the encounter' : 'Questions and answers'), r.kind === 'consult' ? CONSULT_ICON : QA_ICON])
-  const coding = ROUNDS.find(r => r[0] === 'coding')
-  const list = [...(own.length ? own : ROUNDS.filter(r => r[0] !== 'coding')), ...(profile?.tools && !profile.tools.includes('code') ? [] : [coding])]
+  const coding = ROUNDS.find(r => r[0] === 'coding'), topic = ROUNDS.find(r => r[0] === 'topic')
+  const list = [...(own.length ? own : ROUNDS.filter(r => r[0] !== 'coding' && r[0] !== 'topic')), topic, ...(profile?.tools && !profile.tools.includes('code') ? [] : [coding])]
   const levels = profile?.role?.levels?.length ? profile.role.levels : SENIORITY
   // a remembered choice can belong to another role (or another profile): fall back rather than 400
   const [role, setRole] = useState(saved.role || profile?.target || '')
@@ -63,7 +64,7 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
   const [lang, setLang] = useState(saved.language || 'English'); const [jd, setJd] = useState(''); const [showJd, setShowJd] = useState(false); const [persona, setPersona] = useState(saved.persona || 'neutral'); const [subject, setSubject] = useState(saved.subject || '')
   const go = () => {
     if (round === 'coding') return onCoding?.()
-    const o = { role: role.trim(), seniority: sen, round, language: lang, persona, subject: subject.trim() }
+    const o = { role: role.trim(), seniority: sen, round, language: lang, persona, ...(round === 'topic' ? { subject: subject.trim() } : {}) }
     try { localStorage.setItem('cram:iv-setup', JSON.stringify(o)) } catch {}
     onStart({ ...o, jd })
   }
@@ -79,7 +80,6 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
         <label className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Role</span><input className="input" placeholder={profile?.role?.title || profile?.target || 'e.g. Backend engineer, Product manager'} value={role} onChange={e => setRole(e.target.value)} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} autoFocus dir="auto" /></label>
         <div className="flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Level</span><Pills value={sen} onChange={setSen} options={levels} /></div>
       </div>
-      <label className="relative flex flex-col gap-1.5"><span className="text-[11px] uppercase tracking-wider text-dim">Topic <span className="normal-case tracking-normal">(optional)</span></span><input className="input" placeholder="What to be interviewed in, e.g. DDD, Laravel, system design" value={subject} onChange={e => setSubject(e.target.value.slice(0, 120))} onKeyDown={e => e.key === 'Enter' && role.trim() && go()} dir="auto" /></label>
       <div className="relative flex flex-col gap-1.5">
         <span className="text-[11px] uppercase tracking-wider text-dim">Round</span>
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
@@ -89,6 +89,7 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
               <span className="text-sm font-medium text-white">{label}</span><span className="text-[11px] text-dim leading-snug">{sub}</span>
             </button>))}
         </div>
+        {round === 'topic' && <input className="input mt-1" placeholder="What to be interviewed in, e.g. DDD, Laravel, Kafka" value={subject} onChange={e => setSubject(e.target.value.slice(0, 120))} onKeyDown={e => e.key === 'Enter' && role.trim() && subject.trim() && go()} autoFocus dir="auto" />}
       </div>
       <div className="relative flex items-center gap-2 flex-wrap">
         <Pills value={lang} onChange={setLang} options={LANGS} />
@@ -96,7 +97,7 @@ function RealHero({ busy, onStart, onCoding, onPrep, onStories, profile }) {
         <button onClick={() => setShowJd(v => !v)} className={`btn-tint ${showJd || jd ? 'btn-purple' : ''}`}><Ico d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></>} />{jd ? 'Job description added' : 'Add job description'}</button>
       </div>
       {showJd && <textarea dir="auto" className="relative input min-h-[120px] resize-y" placeholder="Paste the job posting (optional). Questions get tailored to it." value={jd} onChange={e => setJd(e.target.value.slice(0, 6000))} />}
-      <button disabled={busy || (round !== 'coding' && !role.trim())} onClick={go} className="relative btn btn-primary text-base px-6 py-2.5 inline-flex items-center justify-center gap-2 self-center" style={busy ? undefined : { animation: 'iv-pulse 2.4s ease-out infinite' }}>
+      <button disabled={busy || (round !== 'coding' && !role.trim()) || (round === 'topic' && !subject.trim())} onClick={go} className="relative btn btn-primary text-base px-6 py-2.5 inline-flex items-center justify-center gap-2 self-center" style={busy ? undefined : { animation: 'iv-pulse 2.4s ease-out infinite' }}>
         {busy ? <Wait label="The interviewer is getting ready…" /> : round === 'coding' ? <><Ico d={<><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></>} />Open Code</> : <><Ico d={<path d="m6 3 14 9-14 9V3z"/>} />Start {(list.find(r => r[0] === round)?.[1] || 'the').toLowerCase()} round</>}
       </button>
     </div>

@@ -419,7 +419,7 @@ const storiesFor = iv => {
 };
 const realBase = iv => `You are interviewing a candidate in a real ${rounds.resolve(iv).label} interview round for the role "${iv.role}" at ${iv.seniority} level. ${langRule(iv.language)} ${roles.addressRule(readJson(PROFILE, {}))}
 ${rounds.resolve(iv).guide}
-${PERSONAS[iv.persona] || ''}${iv.subject ? `Keep every question on ${iv.subject}: that is what the candidate asked to be interviewed in. Cover it from different angles at this round's style and level.\n` : ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\nScore: ${t.score}/10`).join('\n\n')}\n\n` : ''}`;
+${PERSONAS[iv.persona] || ''}${iv.subject ? `Keep every question on ${iv.subject}: that is what the candidate asked to be interviewed in. Cover it from different angles at this round's style and level.\n` : ''}${storiesFor(iv)}${iv.jd ? `The job description they are interviewing for:\n<job_description>\n${iv.jd}\n</job_description>\nTailor the questions to it.\n` : ''}${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nCandidate: ${t.answer}\n${t.ungraded ? 'Not graded yet' : `Score: ${t.score}/10`}`).join('\n\n')}\n\n` : ''}`;
 // A consultation is not an interview: Cram is the person in front of them — a patient, a client, a
 // customer — and the learner is the professional running the encounter. Same turns, grading and rubric
 // machinery; only who is speaking changes.
@@ -431,13 +431,14 @@ Stay in character for every turn. Answer what the professional actually asks, vo
 `;
 };
 const ivBase = iv => iv.mode === 'real' ? (rounds.resolve(iv).kind === rounds.CONSULT ? consultBase(iv) : realBase(iv)) :`You are a sharp, friendly interviewer holding a spoken, open-ended interview about the study material: a real conversation with the learner, not a written exam. Difficulty: ${iv.difficulty}. ${roles.addressRule(readJson(PROFILE, {}))} ${langRule(iv.language)}${iv.focus ? ` Ask only about ${iv.focus.title}${iv.focus.from ? ` (PDF pages ${iv.focus.from}${iv.focus.to ? `-${iv.focus.to}` : ' onwards'})` : ''}.` : ''}
-${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nLearner: ${t.answer}\nVerdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`).join('\n\n')}\n\n` : ''}`;
+${iv.turns.length ? `Transcript so far:\n${iv.turns.map((t, i) => `Q${i + 1}${t.followUp ? ' (follow-up)' : ''}${t.topic ? ` [${t.topic}]` : ''}: ${t.q}\nLearner: ${t.answer}\n${t.ungraded ? 'Not graded yet' : `Verdict: ${t.correct ? 'correct' : 'wrong'} (${t.score}/10)`}`).join('\n\n')}\n\n` : ''}`;
 // Two separate calls: grading is what the learner waits for; the next question is fetched behind the feedback.
 const hintNote = p => p.hint ? `\nBefore answering they asked for a hint and got: "${p.hint}". Take 2 points off the overall score for needing it, and mention that in the feedback.` : '';
 const gradePrompt = (iv, answer) => iv.mode === 'real' ? `${ivBase(iv)}Current question: ${iv.pending.q}${hintNote(iv.pending)}\nThe candidate answered: ${answer || '(no answer)'}\n\nGrade it the way a calibrated interviewer for a ${iv.seniority} ${iv.role} would. Feedback in 3-6 lines: what landed, what was missing or weak, and what a strong ${iv.seniority}-level answer would include. Score each rubric criterion 0-10: ${rounds.resolve(iv).rubric.join(', ')}. Respond with ONLY JSON: {"feedback": string, "score": number 0-10 overall, "rubric": {${rounds.resolve(iv).rubric.map(k => `"${k}": number`).join(', ')}}}`
   : `${ivBase(iv)}Current question (${iv.pending.type}): ${iv.pending.q}${hintNote(iv.pending)}${iv.pending.choices ? `\nChoices: ${iv.pending.choices.map((c, i) => `${'ABCD'[i]}. ${c}`).join(' | ')}\nCorrect choice: ${'ABCD'[iv.pending.answerIndex] || '?'}` : ''}\nThe learner answered: ${answer || '(no answer)'}\n\nGrade this answer honestly: feedback in 2-4 lines (what was right, what was missing, the ideal answer), correct true/false, score 0-10. Respond with ONLY JSON: {"feedback": string, "correct": boolean, "score": number}`;
 // how an interviewer talks, the same in a real round and in an interview on study material, so both sound like a person
 const TALK = `Talk as in a live conversation with a real person. You may open with a short reaction to their last answer that never reveals whether it was right, but make it human and specific: pick up something they actually said (a word, an example, a tool they named), or bridge naturally into the next topic, or skip the reaction and just ask. Vary it every time: look at how your earlier questions in the transcript began and never start the same way twice, and do not fall back on stock fillers (تمام / واخد بالي / حلو / Got it / Great) as a habit. No grading, no hints, no multiple choice.`;
+const ahead = new Map(); // interview id -> the next question, written while the last answer is graded
 const followUps = iv => { let n = 0; for (let i = iv.turns.length - 1; i >= 0 && iv.turns[i].followUp; i--) n++; return n; };
 const nextPrompt = iv => iv.mode === 'real' ? `${ivBase(iv)}${iv.turns.length ? `Ask your next question like a real interviewer. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}. Otherwise move to a new topic or the next stage. Never repeat a question.` : 'Open the round with your first question (a one-line greeting before it is fine).'} ${TALK} Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`
   : `${ivBase(iv)}${iv.turns.length ? `Ask your next question, building on the transcript: go deeper where the learner is strong, come back to gaps, never repeat a question. If the last answer was vague, shallow, missing a key point or made a claim worth testing, ask a follow-up that digs into it (followUp true)${followUps(iv) >= 2 ? '; you already followed up twice on this thread, so move on to a new topic now' : ''}.` : 'Open the interview with your first question (a one-line greeting before it is fine).'} Ask open questions the learner answers in their own words, out loud. ${TALK} Respond with ONLY JSON: {"q": string, "followUp": boolean, "topic": short label of what this question assesses}`;
@@ -450,9 +451,11 @@ app.post('/api/studies/:id/interviews', async (req, res) => {
     const picked = rounds.pick(round, prof.role?.rounds);
     if (!picked) return res.status(400).json({ error: 'unknown round' });
     if (!String(role || '').trim()) return res.status(400).json({ error: 'Say which role you are interviewing for.' });
+    const subject = picked.round === 'topic' ? String(req.body.subject || '').trim().slice(0, 120) : '';
+    if (picked.round === 'topic' && !subject) return res.status(400).json({ error: 'Say which topic to be interviewed in.' });
     // snapshot the round onto the interview: re-deriving or editing the role later must never change
     // how a session already under way is run or graded
-    Object.assign(iv, { mode: 'real', ...picked, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), subject: String(req.body.subject || '').trim().slice(0, 120), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral', ...(prof.role?.clientWord ? { clientWord: prof.role.clientWord } : {}) });
+    Object.assign(iv, { mode: 'real', ...picked, role: String(role).trim().slice(0, 80), seniority: String(seniority).slice(0, 20), difficulty: String(seniority).slice(0, 20), jd: String(req.body.jd || '').trim().slice(0, 6000), ...(subject ? { subject } : {}), persona: PERSONAS[req.body.persona] ? req.body.persona : 'neutral', ...(prof.role?.clientWord ? { clientWord: prof.role.clientWord } : {}) });
   } else if (req.body.focus?.title) iv.focus = { title: String(req.body.focus.title).slice(0, 160), from: Math.round(+req.body.focus.from) || null, to: Math.round(+req.body.focus.to) || null };
   try { iv.pending = nextQ(await json(s, nextPrompt(iv))); (s.interviews ||= []).push(iv); touch(s); res.json(iv); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -462,11 +465,13 @@ app.post('/api/studies/:id/interviews/:iid/answer', async (req, res) => {
   const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv?.pending) return res.status(404).json({ error: 'no open question' });
   const { answer = '', picked = null, secs = 0, elapsed } = req.body, d = req.body.delivery;
   const delivery = d && typeof d === 'object' ? Object.fromEntries(['secs', 'words', 'wpm', 'fillers', 'longPauses'].map(k => [k, Math.max(0, Math.round(+d[k] || 0))])) : null; // measured from the mic
+  // the next question is written while this answer is graded; /next picks it up instead of starting from scratch
+  const nx = json(s, nextPrompt({ ...iv, turns: [...iv.turns, { ...iv.pending, answer, ungraded: true }] })); nx.catch(() => {}); ahead.set(iv.id, nx);
   try {
     const r = await json(s, gradePrompt(iv, answer)), g = graded(iv, r);
     iv.turns.push({ ...iv.pending, answer, picked, secs, feedback: r.feedback || '', ...g, ...(delivery ? { delivery } : {}), at: Date.now() });
     iv.pending = null; if (elapsed != null) iv.elapsed = elapsed; touch(s); res.json(iv);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { ahead.delete(iv.id); res.status(500).json({ error: e.message }); } // the answer goes back in the box: its question would be stale
 });
 // ---------- around the interview: hints, the panel's hire decision, a strong model answer, answering a question again ----------
 const graded = (iv, r) => {
@@ -519,7 +524,8 @@ app.post('/api/studies/:id/interviews/:iid/turns/:i/retry', async (req, res) => 
 app.post('/api/studies/:id/interviews/:iid/next', async (req, res) => {
   const s = study(req.params.id), iv = findIv(s, req.params.iid); if (!iv) return res.status(404).json({ error: 'no such interview' });
   if (iv.pending) return res.json(iv);
-  try { iv.pending = nextQ(await json(s, nextPrompt(iv))); touch(s); res.json(iv); }
+  const nx = ahead.get(iv.id); ahead.delete(iv.id);
+  try { iv.pending = nextQ(await (nx ? nx.catch(() => json(s, nextPrompt(iv))) : json(s, nextPrompt(iv)))); touch(s); res.json(iv); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 // progress autosave: elapsed, status (open ↔ ended — an ended session can always be resumed)
